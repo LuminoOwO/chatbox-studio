@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="158" viewBox="0 0 720 158" role="img" aria-labelledby="t">
+<title id="t">AI contribution, 100% AI overall. Code: 100% AI (Claude 100%); Tests: 100% AI (Claude 100%); Docs: 100% AI (Claude 100%).</title>
+
+<rect x="0.5" y="0.5" width="719" height="157" rx="8" fill="#161b22" stroke="#3d444d" stroke-width="1"/>
+<g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif">
+<text x="16" y="29" font-size="15" font-weight="600" fill="#e6edf3">AI contribution</text>
+<text x="704" y="29" text-anchor="end" font-size="12" fill="#9198a1"><tspan font-size="17" font-weight="800" fill="#e6edf3">100%</tspan> AI overall</text>
+<text x="16" y="57.5" font-size="13" font-weight="600" fill="#e6edf3">Code</text>
+<clipPath id="c0"><rect x="67" y="44" width="567" height="18" rx="4"/></clipPath><g clip-path="url(#c0)">
+<rect x="67.00" y="44" width="567.00" height="18" fill="#D97757"/>
+<text x="73.00" y="57" font-size="11" font-weight="600" fill="#111111">Claude 100%</text>
+</g>
+<text x="704" y="57.5" text-anchor="end" font-size="13" font-weight="700" fill="#e6edf3">100% AI</text>
+<text x="16" y="83.5" font-size="13" font-weight="600" fill="#e6edf3">Tests</text>
+<clipPath id="c1"><rect x="67" y="70" width="567" height="18" rx="4"/></clipPath><g clip-path="url(#c1)">
+<rect x="67.00" y="70" width="567.00" height="18" fill="#D97757"/>
+<text x="73.00" y="83" font-size="11" font-weight="600" fill="#111111">Claude 100%</text>
+</g>
+<text x="704" y="83.5" text-anchor="end" font-size="13" font-weight="700" fill="#e6edf3">100% AI</text>
+<text x="16" y="109.5" font-size="13" font-weight="600" fill="#e6edf3">Docs</text>
+<clipPath id="c2"><rect x="67" y="96" width="567" height="18" rx="4"/></clipPath><g clip-path="url(#c2)">
+<rect x="67.00" y="96" width="567.00" height="18" fill="#D97757"/>
+<text x="73.00" y="109" font-size="11" font-weight="600" fill="#111111">Claude 100%</text>
+</g>
+<text x="704" y="109.5" text-anchor="end" font-size="13" font-weight="700" fill="#e6edf3">100% AI</text>
+<line x1="16" y1="126" x2="704" y2="126" stroke="#3d444d"/>
+<rect x="16" y="135.5" width="9" height="9" rx="2" fill="#D97757"/>
+<text x="29" y="144" font-size="11" fill="#9198a1">Claude</text>
+<text x="704" y="144" text-anchor="end" font-size="10" fill="#9198a1">clanker-index-badge</text>
+</g>
+</svg>

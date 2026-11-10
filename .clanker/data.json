@@ -1,0 +1,46 @@
+{
+  "style": "clanker",
+  "title": null,
+  "overall": 100,
+  "categories": [
+    {
+      "id": "code",
+      "label": "Code",
+      "estimated": false,
+      "ai": 100,
+      "shares": [
+        {
+          "id": "claude",
+          "p": 100
+        }
+      ],
+      "otherMembers": []
+    },
+    {
+      "id": "tests",
+      "label": "Tests",
+      "estimated": false,
+      "ai": 100,
+      "shares": [
+        {
+          "id": "claude",
+          "p": 100
+        }
+      ],
+      "otherMembers": []
+    },
+    {
+      "id": "docs",
+      "label": "Docs",
+      "estimated": false,
+      "ai": 100,
+      "shares": [
+        {
+          "id": "claude",
+          "p": 100
+        }
+      ],
+      "otherMembers": []
+    }
+  ]
+}
