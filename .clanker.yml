@@ -2,6 +2,12 @@
 style: clanker
 categories:
   code: auto
-  bugfix: auto
   tests: auto
   docs: auto
+  # Every fix so far is in the squashed first commit, which git can't split up: all fixes were
+  # written by Claude (bugs found and reported by the maintainer). Set this to "auto" once
+  # fix commits ("fix: ..." or a "Clanker-Category: bugfix" trailer) exist.
+  bugfix: { claude: 100 }
+  # Features and direction came from the maintainer; much of the UI and technical design
+  # from Claude. An estimate - adjust it as you see fit.
+  ideas: { human: 60, claude: 40, estimated: true }
