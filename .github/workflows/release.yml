@@ -1,9 +1,12 @@
-# Builds every package and publishes a release when a version tag (v1.30, ...) is pushed:
-# Windows setup .exe + ZIP, Linux ZIP, .deb, .rpm and the Arch package.
+# Builds every package and publishes the release "v<version>" (Windows setup .exe + ZIP,
+# Linux ZIP, .deb, .rpm and the Arch package). Runs when the version in src/version.py
+# changes on main (the release and its tag are created here), on a pushed v* tag, or by hand.
 name: Release
 
 on:
   push:
+    branches: [main]
+    paths: ["src/version.py", ".github/workflows/release.yml"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -26,14 +29,14 @@ jobs:
           name: packages
           path: dist/*
       - name: Publish
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VER="${TAG#v}"
+          VER=$(sed -n 's/^__version__ *= *"\(.*\)"/\1/p' src/version.py)
+          TAG="v${VER}"
           # this version's part of the changelog as release notes
           awk -v v="## $VER" '$0==v{f=1;next} /^## /{if(f)exit} f' docs/CHANGELOG.md > notes.md
           gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "Chatbox Studio $VER" --notes-file notes.md
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Chatbox Studio $VER" \
+              --notes-file notes.md --latest
           gh release upload "$TAG" --clobber dist/*

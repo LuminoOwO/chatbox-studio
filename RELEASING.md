@@ -4,14 +4,14 @@
    `packaging/arch/PKGBUILD` (`pkgver`).
 2. Add a `## <version>` section at the top of `docs/CHANGELOG.md` - it becomes the release
    notes.
-3. Commit, then tag and push:
+3. Commit and push to `main`:
 
    ```bash
-   git tag v1.31
-   git push origin main v1.31
+   git push origin main
    ```
 
-   `.github/workflows/release.yml` builds every package and publishes the release:
+   Because `src/version.py` changed, `.github/workflows/release.yml` builds every package
+   and publishes the release `v<version>` (it creates the tag):
 
    | File | For |
    |---|---|
