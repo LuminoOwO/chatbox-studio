@@ -210,7 +210,7 @@ GROUPS = [
           "Runs speech recognition on AMD and Intel graphics - also the graphics inside your "
           "processor (APU, laptop) and Radeon cards ROCm doesn't support. Uses your normal "
           "graphics driver, nothing else to install. The translator then runs on the CPU.",
-          40, 90, None),
+          15, 40, None),
     Group("media", "Now playing, program audio and active app",
           "Song and artist from Spotify, YouTube and players, which program plays sound, "
           "audio devices.", 8, 15, "media.txt",

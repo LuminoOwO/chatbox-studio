@@ -114,7 +114,7 @@ def vulkan(fresh: bool) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         z = Path(tmp) / "engine.zip"
         try:
-            download(url, z, 40)
+            download(url, z, 15)
         except Exception as e:
             say(f"ERROR the download failed ({e}). {url}")
             return 1
