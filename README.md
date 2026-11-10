@@ -1,5 +1,10 @@
 # Chatbox Studio
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".clanker/clanker-dark.svg">
+  <img alt="Clanker Index" src=".clanker/clanker-light.svg">
+</picture>
+
 Your VRChat chatbox, all in one app: speak and your words appear in the chatbox - as you said
 them or translated into any of 47 languages - plus music, lyrics, clocks, status, PC and VR
 headset info. Speech recognition and translation run locally on your own PC; nothing you say

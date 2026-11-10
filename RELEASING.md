@@ -25,6 +25,10 @@
 To build locally: `python3 build_release.py` (needs `nsis`, `dpkg-deb`, `rpm`,
 `libarchive-tools` and `zstd`; a missing tool skips its package).
 
+The **Clanker Index** badge in the README (`.clanker/*.svg`) is rebuilt and committed by
+`.github/workflows/clanker-index.yml` on every push to `main`, so it updates with each
+version. After a release, `git pull` before your next push to get that badge commit.
+
 ## The Vulkan speech engine
 
 `.github/workflows/engines.yml` builds whisper.cpp's `whisper-server` with Vulkan for Linux
