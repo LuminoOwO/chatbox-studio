@@ -171,11 +171,32 @@ def stage_linux(root: Path):
         d.chmod(0o755)
 
 
+# After installing: menus, icons, and - per user - take over an install from the Linux ZIP
+# (its menu entry and ~/.local/bin links would otherwise keep starting the old copy). Only
+# files the ZIP installer made are touched; settings, models and the Python environment
+# (shared with the package) stay.
+TAKEOVER = r"""
+for home in $(getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 {print $6}'); do
+    [ -d "$home" ] || continue
+    root="$home/.local/share/chatbox-studio"
+    [ -f "$root/run.sh" ] || continue
+    rm -f "$home/.local/share/applications/chatbox-studio.desktop" \
+          "$home/.local/share/applications/chatbox-studio-setup.desktop"
+    for b in chatbox-studio chatbox-studio-setup; do
+        case "$(readlink "$home/.local/bin/$b" 2>/dev/null)" in
+            */chatbox-studio/run.sh|*/chatbox-studio/setup.sh) rm -f "$home/.local/bin/$b" ;;
+        esac
+    done
+    rm -rf "$root/app" "$root/run.sh" "$root/setup.sh" "$root/uninstall.sh" \
+           "$root/setup_translator.sh" "$root/README.md" "$root/CHANGELOG.md"
+done
+"""
 POSTINST = """#!/bin/sh
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
 exit 0
 """
+POSTINST_TAKEOVER = POSTINST.replace("exit 0", TAKEOVER.strip() + "\nexit 0")
 
 
 def installed_kb(root: Path) -> int:
@@ -201,8 +222,8 @@ def build_deb() -> Path | None:
             f"Description: {SUMMARY}\n {DESCRIPTION}\n .\n The first start downloads the "
             "setup window into ~/.local/share/chatbox-studio;\n there you pick the speech "
             "model, translator and graphics support.\n")
-        for name in ("postinst", "postrm"):
-            (deb / name).write_text(POSTINST)
+        for name, text in (("postinst", POSTINST_TAKEOVER), ("postrm", POSTINST)):
+            (deb / name).write_text(text)
             (deb / name).chmod(0o755)
         r = subprocess.run([tool, "--root-owner-group", "-Zxz", "--build", str(root), str(out)],
                            capture_output=True, text=True)
@@ -251,7 +272,7 @@ pick the speech model, translator and graphics support.
 cp -a {stage}/. %{{buildroot}}/
 
 %post
-{POSTINST.split(chr(10), 1)[1]}
+{POSTINST_TAKEOVER.split(chr(10), 1)[1]}
 %postun
 {POSTINST.split(chr(10), 1)[1]}
 %files
@@ -288,8 +309,10 @@ def build_arch() -> Path | None:
         (root / ".PKGINFO").write_text("\n".join(info) + "\n")
         (root / ".INSTALL").write_text(
             "post_install() {\n  update-desktop-database -q /usr/share/applications 2>/dev/null"
-            "\n  gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null\n  true\n}"
-            "\npost_upgrade() {\n  post_install\n}\npost_remove() {\n  post_install\n}\n")
+            "\n  gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null\n"
+            + TAKEOVER.strip() + "\n  true\n}"
+            "\npost_upgrade() {\n  post_install\n}\npost_remove() {\n"
+            "  update-desktop-database -q /usr/share/applications 2>/dev/null\n  true\n}\n")
         entries = [".PKGINFO", ".INSTALL", "opt", "usr"]
         env = dict(os.environ, LANG="C")
         subprocess.run([bsdtar, "-czf", ".MTREE", "--format=mtree", "--options="

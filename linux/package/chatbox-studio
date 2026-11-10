@@ -11,6 +11,20 @@ DATA="$DATA_HOME/chatbox-studio"
 VENV="$DATA/venv"
 TOOL="$(basename "$0")"
 
+# an older install from the Linux ZIP: its menu entry and ~/.local/bin links would keep
+# starting the old copy - remove them (settings, models and the Python environment stay)
+if [ -f "$DATA/run.sh" ]; then
+    rm -f "$DATA_HOME/applications/chatbox-studio.desktop" \
+          "$DATA_HOME/applications/chatbox-studio-setup.desktop"
+    for b in chatbox-studio chatbox-studio-setup; do
+        case "$(readlink "$HOME/.local/bin/$b" 2>/dev/null)" in
+            */chatbox-studio/run.sh|*/chatbox-studio/setup.sh) rm -f "$HOME/.local/bin/$b" ;;
+        esac
+    done
+    rm -rf "$DATA/app" "$DATA/run.sh" "$DATA/setup.sh" "$DATA/uninstall.sh" \
+           "$DATA/setup_translator.sh" "$DATA/README.md" "$DATA/CHANGELOG.md"
+fi
+
 want=$(sha256sum "$APP_DIR/req/base.txt" | cut -d' ' -f1)
 if [ ! -x "$VENV/bin/python" ] || [ "$(cat "$VENV/base.hash" 2>/dev/null)" != "$want" ]; then
     # first start (or the setup window's packages changed): prepare the environment

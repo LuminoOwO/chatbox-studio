@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.31
+- **Installing a Linux package now takes over an older install from the Linux ZIP.** Before,
+  the ZIP's menu entry and `~/.local/bin/chatbox-studio` kept starting the old copy (for
+  example the old Quick start with its language presets). The package removes those old
+  launchers and app files; your settings, models and Python environment stay and are used
+  by the package.
+- `install.sh` (ZIP) stops with a note when the system package is installed, so the two
+  can't get in each other's way.
+
 ## 1.30
 - **AMD and integrated graphics, properly:** a second speech engine, **Vulkan**
   (whisper.cpp), runs speech recognition on any graphics chip with a Vulkan driver - every

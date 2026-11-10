@@ -22,6 +22,11 @@ step() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$1"; exit 1; }
 
 [ -f "$SRC/app.py" ] || fail "app files missing - extract the whole ZIP and run install.sh from there."
+if [ -d /opt/chatbox-studio/app ] && [ "${CBS_FORCE:-0}" != 1 ]; then
+    fail "Chatbox Studio is installed as a system package (/opt/chatbox-studio). Update it with
+       the newer .deb / .rpm / Arch package instead - two installs would get in each other's way.
+       (To use the ZIP anyway, remove the package first.)"
+fi
 VERSION=$(sed -n 's/^__version__ *= *"\(.*\)"/\1/p' "$SRC/version.py")
 OLD=""
 [ -f "$VERFILE" ] && OLD=$(cat "$VERFILE")
