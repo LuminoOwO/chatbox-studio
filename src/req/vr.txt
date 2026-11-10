@@ -1,0 +1,2 @@
+# VR headset, controllers and trackers (reads SteamVR)
+openvr>=2.0

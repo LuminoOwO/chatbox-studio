@@ -1,0 +1,22 @@
+# Arch Linux package from source. Prebuilt: chatbox-studio-<version>-1-x86_64.pkg.tar.zst on
+# the releases page (sudo pacman -U <file>).
+pkgname=chatbox-studio
+pkgver=1.30
+pkgrel=1
+pkgdesc="VRChat chatbox studio: local speech recognition, translation and live info"
+arch=('x86_64')
+url="https://github.com/LuminoOwO/chatbox-studio"
+license=('custom')
+depends=('python' 'tk' 'portaudio' 'xcb-util-cursor' 'libpulse' 'pciutils'
+         'vulkan-icd-loader' 'libxkbcommon-x11' 'fontconfig')
+optdepends=('vulkan-radeon: speech recognition on AMD graphics (Vulkan)'
+            'vulkan-intel: speech recognition on Intel graphics (Vulkan)'
+            'nvidia-utils: NVIDIA graphics cards (CUDA)')
+makedepends=('python')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+    python build_release.py --stage "$pkgdir"
+}

@@ -1,0 +1,4 @@
+# Needed by the setup window itself
+PySide6-Essentials>=6.6      # Qt widgets only (much smaller than full PySide6)
+numpy
+psutil>=5.9                  # hardware check, PC stats, program names

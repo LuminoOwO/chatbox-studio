@@ -1,0 +1,7 @@
+# Everything except the CUDA libraries (the setup window installs the parts you pick;
+# this file is for manual installs: pip install -r requirements.txt)
+-r req/base.txt
+-r req/core.txt
+-r req/media.txt
+-r req/vr.txt
+-r req/earshot.txt

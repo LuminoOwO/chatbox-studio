@@ -1,0 +1,107 @@
+# Builds the Vulkan speech engine (whisper.cpp's whisper-server with GGML_VULKAN) for Linux
+# and Windows and publishes it as the release "engine-whispercpp-<version>". The setup
+# downloads it from there when you pick a Vulkan device (AMD without ROCm, APUs, Intel).
+name: Vulkan speech engine
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/engines.yml", "tests/test_whispercpp_engine.py"]
+
+permissions:
+  contents: write
+
+env:
+  WHISPERCPP_VERSION: "1.9.5"
+
+jobs:
+  linux:
+    # 22.04 = glibc 2.35: the binary also runs on Debian 12, Ubuntu 22.04+, Fedora, Arch ...
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vulkan SDK and a software Vulkan driver (for the test)
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake mesa-vulkan-drivers vulkan-sdk zip
+      - name: Build whisper-server (Vulkan)
+        run: |
+          git clone --depth 1 --branch "v${WHISPERCPP_VERSION}" https://github.com/ggml-org/whisper.cpp
+          cmake -S whisper.cpp -B build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON \
+            -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON \
+            -DGGML_FMA=ON -DGGML_F16C=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_SDL2=OFF \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          cmake --build build -j "$(nproc)" --target whisper-server
+          ls -la build/bin
+          ldd build/bin/whisper-server
+      - name: Test with the Chatbox Studio client (tiny model, software Vulkan)
+        run: |
+          python3 -m pip install numpy huggingface_hub
+          curl -sSL -o ggml-tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          ENGINE=build/bin/whisper-server MODEL=ggml-tiny.bin AUDIO=whisper.cpp/samples/jfk.wav \
+            python3 tests/test_whispercpp_engine.py
+      - name: Package
+        run: |
+          mkdir -p out && cp build/bin/whisper-server out/
+          cp whisper.cpp/LICENSE out/LICENSE-whisper.cpp.txt
+          (cd out && zip -9 ../whisper-vulkan-linux-x86_64.zip *)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: whisper-vulkan-linux-x86_64.zip
+
+  windows:
+    runs-on: windows-2022
+    env:
+      VULKAN_VERSION: 1.4.357.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vulkan SDK
+        shell: pwsh
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+      - name: Build whisper-server (Vulkan)
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch "v$env:WHISPERCPP_VERSION" https://github.com/ggml-org/whisper.cpp
+          cmake -S whisper.cpp -B build -A x64 -DGGML_VULKAN=ON -DBUILD_SHARED_LIBS=OFF `
+            -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON `
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_SDL2=OFF `
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build build --config Release -j 4 --target whisper-server
+          Get-ChildItem -Recurse build/bin
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory out | Out-Null
+          Copy-Item build/bin/Release/whisper-server.exe out/
+          Copy-Item whisper.cpp/LICENSE out/LICENSE-whisper.cpp.txt
+          & out/whisper-server.exe --help | Select-Object -First 5
+          Compress-Archive -Path out/* -DestinationPath whisper-vulkan-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: whisper-vulkan-windows-x64.zip
+
+  publish:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Release engine-whispercpp-${{ env.WHISPERCPP_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="engine-whispercpp-${WHISPERCPP_VERSION}"
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+              --title "Vulkan speech engine (whisper.cpp ${WHISPERCPP_VERSION})" \
+              --notes "whisper.cpp ${WHISPERCPP_VERSION} whisper-server built with Vulkan. Downloaded by Chatbox Studio Setup when speech recognition runs on a Vulkan device (AMD without ROCm, APUs, Intel graphics). whisper.cpp is MIT licensed."
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
+            linux/whisper-vulkan-linux-x86_64.zip windows/whisper-vulkan-windows-x64.zip

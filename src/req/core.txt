@@ -1,0 +1,10 @@
+# The app: speech recognition, translation runtime, microphone, VRChat OSC
+faster-whisper>=1.2,<2
+ctranslate2>=4.4
+tokenizers>=0.15
+python-osc>=1.8
+sounddevice>=0.5
+soxr>=0.5
+sentencepiece>=0.2
+zeroconf>=0.130              # OSCQuery: VRChat finds the app when port 9001 is taken
+tzdata                       # time zones for the clock (Windows has none built in)

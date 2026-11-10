@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Chatbox Studio launcher (system package: .deb / .rpm / Arch).
+# App code: /opt/chatbox-studio/app (from the package). Python environment, models and
+# logs: ~/.local/share/chatbox-studio (per user, the same place the ZIP installer uses).
+# Installed as /usr/bin/chatbox-studio and /usr/bin/chatbox-studio-setup.
+set -u
+APP_DIR="${CHATBOX_STUDIO_APP:-/opt/chatbox-studio/app}"
+DATA_HOME="${XDG_DATA_HOME:-}"
+[ -n "$DATA_HOME" ] || DATA_HOME="$HOME/.local/share"
+DATA="$DATA_HOME/chatbox-studio"
+VENV="$DATA/venv"
+TOOL="$(basename "$0")"
+
+want=$(sha256sum "$APP_DIR/req/base.txt" | cut -d' ' -f1)
+if [ ! -x "$VENV/bin/python" ] || [ "$(cat "$VENV/base.hash" 2>/dev/null)" != "$want" ]; then
+    # first start (or the setup window's packages changed): prepare the environment
+    exec python3 "$APP_DIR/bootstrap.py" "$TOOL" "$@"
+fi
+
+SP=$("$VENV/bin/python" -c 'import site; print(site.getsitepackages()[0])')
+export LD_LIBRARY_PATH="$SP/nvidia/cublas/lib:$SP/nvidia/cudnn/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+[ -d /opt/rocm/lib ] && export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/opt/rocm/lib"   # AMD (ROCm)
+export CUDA_DEVICE_ORDER=PCI_BUS_ID   # GPU numbers match nvidia-smi
+export CHATBOX_STUDIO_LAUNCHER="$(dirname "$(readlink -f "$0")")/chatbox-studio"
+
+if [ "$TOOL" = "chatbox-studio-setup" ]; then
+    [ $# -gt 0 ] || set -- --modify
+    exec "$VENV/bin/python" "$APP_DIR/setup_gui.py" "$@"
+fi
+if [ ! -f "$DATA/components.json" ]; then
+    # nothing picked yet: the setup window first (it starts the app when you click Finish)
+    exec "$VENV/bin/python" "$APP_DIR/setup_gui.py" --first
+fi
+exec "$VENV/bin/python" "$APP_DIR/app.py" "$@"

@@ -1,0 +1,2 @@
+# Earshot: hearing the game (Windows loopback; Linux uses PipeWire / PulseAudio tools)
+soundcard>=0.4.4; sys_platform == "win32"
