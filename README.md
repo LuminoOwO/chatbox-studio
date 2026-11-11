@@ -5,6 +5,12 @@
   <img alt="Clanker Index" src=".clanker/clanker-light.svg">
 </picture>
 
+> [!NOTE]
+> **A full rewrite in Rust is in progress:**
+> [chatbox-studio-rust](https://github.com/LuminoOwO/chatbox-studio-rust). It does the same as
+> this app, as one program without a Python environment to set up. Until it's ready, this
+> Python version is the one to use; it gets fixes but no new features.
+
 Your VRChat chatbox, all in one app: speak and your words appear in the chatbox - as you said
 them or translated into any of 47 languages - plus music, lyrics, clocks, status, PC and VR
 headset info. Speech recognition and translation run locally on your own PC; nothing you say
