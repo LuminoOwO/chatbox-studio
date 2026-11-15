@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.32
+- **Updates from inside the app.** When a new version is out, an **⬆ Update to …** button
+  appears at the top of the window (checked at most once a day, or right away with
+  *❔ Help › Check for updates…*). It shows what's new and installs the update the way this
+  copy was installed:
+  - Windows: downloads the new setup, closes the app and installs it without the welcome
+    page; the setup window then brings your parts up to date.
+  - .deb / .rpm / Arch: installs the new package with apt, dnf / zypper or pacman - your
+    system asks for your password - and restarts the app. If the parts need newer packages,
+    the setup window opens first.
+  - Linux ZIP: closes the app and runs the new ZIP's `install.sh`.
+  - Every download is checked against the checksum GitHub publishes for it. Settings,
+    models and the Python environment are kept.
+  - *Skip this version* and *Later* are there too; the daily check can be turned off in
+    *⚙ Settings › General › About*. Nothing is installed without you clicking *Update now*.
+- The Linux packages record which kind they are (`/opt/chatbox-studio/PACKAGE`), so the app
+  knows how to update itself.
+
 ## 1.31
 - **Installing a Linux package now takes over an older install from the Linux ZIP.** Before,
   the ZIP's menu entry and `~/.local/bin/chatbox-studio` kept starting the old copy (for

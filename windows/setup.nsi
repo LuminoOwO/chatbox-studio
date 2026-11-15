@@ -14,6 +14,7 @@ ManifestDPIAware true
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
 
 Name "Chatbox Studio ${VERSION}"
 Caption "Chatbox Studio ${VERSION} Setup"
@@ -37,9 +38,20 @@ VIAddVersionKey "LegalCopyright" "Chatbox Studio"
 !define MUI_INSTFILESPAGE_FINISHHEADER_TEXT "Ready"
 !define MUI_INSTFILESPAGE_FINISHHEADER_SUBTEXT "The Chatbox Studio Setup window opens now."
 
+; started by the app's "Update now" (/UPDATE): straight to installing, no welcome page
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipWelcomeOnUpdate
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
+
+Function SkipWelcomeOnUpdate
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "/UPDATE" $R1
+    ${IfNot} ${Errors}
+        Abort
+    ${EndIf}
+FunctionEnd
 
 Section "Chatbox Studio"
     SetDetailsPrint both

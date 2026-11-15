@@ -136,8 +136,9 @@ Categories=Settings;Utility;
 """
 
 
-def stage_linux(root: Path):
-    """The installed file tree (shared by .deb, .rpm and Arch)."""
+def stage_linux(root: Path, kind: str):
+    """The installed file tree (shared by .deb, .rpm and Arch). kind (deb / rpm / arch) goes
+    into /opt/chatbox-studio/PACKAGE, so the app knows how to install its updates."""
     opt = root / "opt" / PKG
     for src, rel in app_files():
         dst = opt / rel
@@ -153,6 +154,7 @@ def stage_linux(root: Path):
     shutil.copy2(ROOT / "linux" / "package" / PKG, launcher)
     launcher.chmod(0o755)
     (opt / "VERSION").write_text(VERSION + "\n")
+    (opt / "PACKAGE").write_text(kind + "\n")
     ub = root / "usr" / "bin"
     ub.mkdir(parents=True, exist_ok=True)
     for tool in (PKG, f"{PKG}-setup"):
@@ -211,7 +213,7 @@ def build_deb() -> Path | None:
     out = DIST / f"{PKG}_{VERSION}_amd64.deb"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "pkg"
-        stage_linux(root)
+        stage_linux(root, "deb")
         deb = root / "DEBIAN"
         deb.mkdir()
         (deb / "control").write_text(
@@ -240,7 +242,7 @@ def build_rpm() -> Path | None:
     with tempfile.TemporaryDirectory() as tmp:
         top = Path(tmp)
         stage = top / "stage"
-        stage_linux(stage)
+        stage_linux(stage, "rpm")
         files = []
         for p in sorted(stage.rglob("*")):
             rel = "/" + p.relative_to(stage).as_posix()
@@ -299,7 +301,7 @@ def build_arch() -> Path | None:
     out = DIST / f"{PKG}-{VERSION}-1-x86_64.pkg.tar.zst"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "pkg"
-        stage_linux(root)
+        stage_linux(root, "arch")
         info = [f"pkgname = {PKG}", f"pkgbase = {PKG}", f"pkgver = {VERSION}-1",
                 f"pkgdesc = {SUMMARY}", f"url = {URL}", f"builddate = {int(time.time())}",
                 "packager = Chatbox Studio release script", f"size = {installed_kb(root) * 1024}",
@@ -361,6 +363,6 @@ def main():
 if __name__ == "__main__":
     import sys
     if len(sys.argv) == 3 and sys.argv[1] == "--stage":   # distro packaging (PKGBUILD)
-        stage_linux(Path(sys.argv[2]))
+        stage_linux(Path(sys.argv[2]), "arch")
     else:
         main()

@@ -1,2 +1,2 @@
 APP_NAME = "Chatbox Studio"
-__version__ = "1.31"
+__version__ = "1.32"

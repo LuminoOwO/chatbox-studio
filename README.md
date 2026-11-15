@@ -53,8 +53,8 @@ The packages install the app to `/opt/chatbox-studio` with a menu entry and the 
 `chatbox-studio` and `chatbox-studio-setup`. The first start prepares a per-user Python
 environment in `~/.local/share/chatbox-studio` (about 100 MB, with a progress window) - if
 your distribution's Python is too new or too old for the AI packages, it fetches a standalone
-Python 3.12 for it. Update by installing the newer package; uninstall with your package
-manager (`~/.local/share/chatbox-studio` keeps your models until you delete it).
+Python 3.12 for it. Updates install from inside the app (see *Updating* below); uninstall
+with your package manager (`~/.local/share/chatbox-studio` keeps your models until you delete it).
 
 The ZIP's `install.sh` puts everything into `~/.local/share/chatbox-studio` instead; on
 Debian-based systems it installs the few system libraries it needs with `apt`. Elsewhere,
@@ -82,6 +82,23 @@ Open it again any time to add or remove parts: **Chatbox Studio Setup** in the m
 `chatbox-studio-setup`, or *⚙ Settings › Parts & about*. *Fresh install…* reinstalls every
 part from scratch; *Uninstall completely…* removes the app's files, Python, shortcuts and -
 if you like - settings and models.
+
+### Updating
+
+The app updates itself: when a new version is out, an **⬆ Update to …** button shows at
+the top of the window (it looks at most once a day; *❔ Help › Check for updates…* looks right
+away). Click it to see what's new, then **Update now**:
+
+- **Windows:** the new setup downloads, Chatbox Studio closes, the update installs without
+  clicks, and the setup window brings your parts up to date - click *Install*.
+- **.deb / .rpm / Arch package:** the package downloads and your package manager installs it
+  - your system asks for your password. Then the app restarts.
+- **Linux ZIP:** the new ZIP downloads, the app closes and its `install.sh` runs.
+
+Each download is checked against the checksum GitHub publishes for it. Settings, models and
+the Python environment stay. Turn the daily look off in *⚙ Settings › General › About*; only
+GitHub is asked, nothing about you is sent. Installing a newer package or setup by hand
+works as before.
 
 **In VRChat:** Action Menu → Options → OSC → **Enabled**.
 

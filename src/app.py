@@ -164,6 +164,8 @@ class Window(QMainWindow):
         self.history: list[str] = []
         self.tr_state, self.tr_pct = "missing", 0
         self.bridge = Bridge()
+        from update_ui import UpdateChecker
+        self.updates = UpdateChecker(self)
         self.bridge.log.connect(self.add_log)
         self.bridge.result.connect(self.add_result)
         self.bridge.translator.connect(self.on_translator_state)
@@ -184,6 +186,7 @@ class Window(QMainWindow):
                                   timeout=lambda: save_settings(self.s))
         if start_engine:
             QTimer.singleShot(0, self.start_engine)
+            QTimer.singleShot(5000, self.updates.maybe_check)
             if not self.s.extra.get("onboarded"):
                 QTimer.singleShot(700, self.show_quick_start)
 
@@ -227,6 +230,9 @@ class Window(QMainWindow):
         self.listen_btn.setMinimumWidth(110)
         self.listen_btn.toggled.connect(self.on_listen_toggled)
         head.addWidget(self.listen_btn)
+        self.update_btn = QPushButton("⬆ Update", objectName="primary", visible=False)
+        self.update_btn.clicked.connect(lambda: self.updates.open())
+        head.addWidget(self.update_btn)
         self.help_btn = QPushButton("❔ Help")
         self.help_btn.setToolTip("Quick start, a tour of the window, keyboard shortcuts (F1)")
         hm = QMenu(self.help_btn)
@@ -236,6 +242,8 @@ class Window(QMainWindow):
         hm.addSeparator()
         hm.addAction("Open the manual (README)", self.open_readme)
         hm.addAction("Copy the log (for a bug report)", self.copy_log)
+        hm.addSeparator()
+        hm.addAction("Check for updates…", lambda: self.updates.check_now())
         self.help_btn.setMenu(hm)
         head.addWidget(self.help_btn)
         self.settings_btn = QPushButton("⚙ Settings")
@@ -543,6 +551,20 @@ class Window(QMainWindow):
                                "and disk space each part needs. Restart the app afterwards."))
         section("About", form)
         form.addRow(QLabel(f"{APP_NAME} {__version__}"))
+        upd_row = QHBoxLayout()
+        upd_auto = QCheckBox("Check for updates when the app starts")
+        upd_auto.setToolTip("At most once a day. Asks GitHub for the newest version - "
+                            "nothing about you is sent. A new version shows as an "
+                            "“Update” button at the top; nothing is installed without you.")
+        upd_auto.setChecked(bool(self.s.extra.get("update_check", True)))
+        upd_auto.toggled.connect(lambda on: (self.s.extra.__setitem__("update_check", bool(on)),
+                                             self.save()))
+        upd_row.addWidget(upd_auto)
+        upd_now = QPushButton("Check now")
+        upd_now.clicked.connect(lambda: self.updates.check_now())
+        upd_row.addWidget(upd_now)
+        upd_row.addStretch()
+        form.addRow(upd_row)
         form.addRow(hint_label(f"Settings: {paths.config_dir()}\nApp and models: "
                                f"{paths.data_dir()}"))
         folder = QPushButton("Open the app folder")
@@ -685,6 +707,15 @@ class Window(QMainWindow):
     # --------------------------------------------------------------- logic
     def save(self):
         self._save_timer.start()
+
+    def show_update_button(self, version: str):
+        self.update_btn.setText(f"⬆ Update to {version}")
+        self.update_btn.setToolTip(f"{APP_NAME} {version} is available - see what's new "
+                                   "and install it")
+        self.update_btn.setVisible(True)
+
+    def hide_update_button(self):
+        self.update_btn.setVisible(False)
 
     def fill_mics(self):
         current = self.s.mic_device
