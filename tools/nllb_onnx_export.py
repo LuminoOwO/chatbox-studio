@@ -63,7 +63,10 @@ def export(name: str, out: Path):
             o = self.m.model.decoder(input_ids=input_ids, encoder_hidden_states=dummy,
                                      encoder_attention_mask=encoder_attention_mask,
                                      past_key_values=past, use_cache=True, return_dict=True)
-            logits = self.m.lm_head(o.last_hidden_state[:, -1, :])
+            # F.linear on the shared embedding exports as Gemm(transB=1) on the same weight;
+            # lm_head(...) would get a transposed copy of it folded in (+525 MB)
+            logits = torch.nn.functional.linear(o.last_hidden_state[:, -1, :],
+                                                self.m.model.shared.weight)
             pres = []
             for layer in o.past_key_values:
                 pres += [layer[0], layer[1]]
@@ -168,7 +171,7 @@ def check(name: str, out: Path) -> int:
             return 1
     print(f"{same}/{len(SAMPLES)} identical")
     # int8 (CTranslate2) and fp16 (ONNX) differ a little; most must still match exactly
-    return 0 if same >= len(SAMPLES) // 2 else 1
+    return 0 if same >= len(SAMPLES) * 5 // 8 else 1
 
 
 if __name__ == "__main__":

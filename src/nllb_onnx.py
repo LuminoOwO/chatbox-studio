@@ -200,16 +200,19 @@ class OnnxTranslator:
                 for t in top:
                     cand.append((score + float(logp[b, t]), b, int(t)))
             cand.sort(key=lambda c: -c[0])
+            # like CTranslate2: an end among the best `beam_size` candidates finishes that
+            # hypothesis; the search stops once the best candidate itself is an end
             nxt = []
-            for score, b, t in cand:
+            for rank, (score, b, t) in enumerate(cand):
                 toks = beams[b][0] + [t]
                 if t == self.eos:
-                    finished.append((score / (len(toks) - len(prefix)), toks))
-                else:
-                    nxt.append((toks, score, b))
+                    if rank < beam_size:
+                        finished.append((score / (len(toks) - len(prefix)), toks))
+                    continue
+                nxt.append((toks, score, b))
                 if len(nxt) == beam_size:
                     break
-            if len(finished) >= beam_size or not nxt:
+            if cand[0][2] == self.eos or not nxt:
                 break
             order = np.array([b for _t, _s, b in nxt], dtype=np.int64)
             past = {k2: v.take(order, axis=0) for k2, v in past.items()}
