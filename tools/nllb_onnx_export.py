@@ -23,12 +23,28 @@ def fp16(src: Path, out: Path):
     out.mkdir(parents=True, exist_ok=True)
     for name in ("encoder_model.onnx", "decoder_model_merged.onnx"):
         m = onnx.load(str(src / name), load_external_data=True)
-        # layer norms and softmax stay float32 (fp16 overflows there on long sentences)
-        m = float16.convert_float_to_float16(
-            m, keep_io_types=True, disable_shape_infer=True,
-            op_block_list=["LayerNormalization", "Softmax", "Pow", "ReduceMean", "Sqrt"])
+        m = float16.convert_float_to_float16(m, keep_io_types=True, disable_shape_infer=True)
         onnx.save(m, str(out / name))
         print(f"{name}: {(out / name).stat().st_size / 1e6:.0f} MB")
+        report(m)
+
+
+def report(m):
+    """Bytes of weights per data type, also inside subgraphs (If branches)."""
+    import onnx
+    from onnx import numpy_helper
+    sizes: dict = {}
+
+    def walk(g):
+        for t in g.initializer:
+            k = onnx.TensorProto.DataType.Name(t.data_type)
+            sizes[k] = sizes.get(k, 0) + numpy_helper.to_array(t).nbytes
+        for n in g.node:
+            for a in n.attribute:
+                if a.type == onnx.AttributeProto.GRAPH:
+                    walk(a.g)
+    walk(m.graph)
+    print("   weights:", {k: f"{v / 1e6:.0f} MB" for k, v in sizes.items()})
     cfg = json.loads((src / "config.json").read_text())
     keep = {k: cfg[k] for k in ("d_model", "decoder_layers", "decoder_attention_heads",
                                 "encoder_layers", "encoder_attention_heads", "eos_token_id",
