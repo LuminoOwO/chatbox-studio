@@ -27,6 +27,11 @@ def fp16(src: Path, out: Path):
         onnx.save(m, str(out / name))
         print(f"{name}: {(out / name).stat().st_size / 1e6:.0f} MB")
         report(m)
+    cfg = json.loads((src / "config.json").read_text())
+    keep = {k: cfg[k] for k in ("d_model", "decoder_layers", "decoder_attention_heads",
+                                "encoder_layers", "encoder_attention_heads", "eos_token_id",
+                                "decoder_start_token_id", "pad_token_id", "vocab_size") if k in cfg}
+    (out / "config.json").write_text(json.dumps(keep, indent=2) + "\n")
 
 
 def report(m):
@@ -45,11 +50,6 @@ def report(m):
                     walk(a.g)
     walk(m.graph)
     print("   weights:", {k: f"{v / 1e6:.0f} MB" for k, v in sizes.items()})
-    cfg = json.loads((src / "config.json").read_text())
-    keep = {k: cfg[k] for k in ("d_model", "decoder_layers", "decoder_attention_heads",
-                                "encoder_layers", "encoder_attention_heads", "eos_token_id",
-                                "decoder_start_token_id", "pad_token_id", "vocab_size") if k in cfg}
-    (out / "config.json").write_text(json.dumps(keep, indent=2) + "\n")
 
 
 SAMPLES = [
