@@ -6,9 +6,10 @@ ROCm support.
 Runs in a helper process (model_worker.py directml) with the DirectML build of ONNX
 Runtime first on its path: the app's own onnxruntime (voice detection) is another build.
 
-The model: Meta's NLLB-200 exported to ONNX (encoder + decoder with its key/value cache,
-fp16 weights, float32 inputs/outputs) by .github/workflows/nllb-onnx.yml, published as
-release files of this repository. The tokenizer and vocabulary are the ones of the
+The model: Meta's NLLB-200 exported to ONNX by tools/nllb_onnx_export.py (in
+.github/workflows/nllb-onnx.yml): an encoder that also computes the decoder's
+cross-attention keys / values, and a decoder that always takes its key/value cache (fp16
+weights, float32 inputs/outputs). Published as release files of this repository. The tokenizer and vocabulary are the ones of the
 CTranslate2 model next to it (translator.py), so both give the same tokens.
 """
 
@@ -144,7 +145,8 @@ class OnnxTranslator:
         used = self.dec.get_providers()
         if providers and not isinstance(providers[0], str) and used[0] != "DmlExecutionProvider":
             raise RuntimeError(f"DirectML didn't start (ONNX Runtime uses {used[0]})")
-        self.dec_inputs = {i.name for i in self.dec.get_inputs()}
+        self.enc_outputs = [o.name for o in self.enc.get_outputs()]
+        self.dec_outputs = [o.name for o in self.dec.get_outputs()]
         self.translate("Hello!", "en", "de")             # warm-up (also checks it works)
         log(f"Translator {name} ready on {where} in {time.perf_counter() - t0:.1f} s.")
 
@@ -157,40 +159,14 @@ class OnnxTranslator:
         skip = {self.eos, self.start, self.ids.get(NLLB[dst], -1)}
         return self.sp.decode([self.vocab[i] for i in ids if i not in skip]).strip()
 
-    # ---- decoder steps
-    def _empty_past(self, n: int) -> dict:
-        z = np.zeros((n, self.heads, 0, self.head_dim), dtype=np.float32)
-        feed = {}
-        for i in range(self.layers):
-            for part in ("decoder", "encoder"):
-                for kv in ("key", "value"):
-                    feed[f"past_key_values.{i}.{part}.{kv}"] = z
-        return feed
-
-    def _step(self, input_ids, enc_out, enc_mask, past: dict | None):
-        feed = {"input_ids": input_ids, "encoder_hidden_states": enc_out,
-                "encoder_attention_mask": enc_mask}
-        if past is None:
-            feed.update(self._empty_past(input_ids.shape[0]))
-            use_cache = False
-        else:
-            feed.update(past)
-            use_cache = True
-        if "use_cache_branch" in self.dec_inputs:
-            feed["use_cache_branch"] = np.array([use_cache])
+    # ---- decoder steps (format 2: see tools/nllb_onnx_export.py)
+    def _step(self, input_ids, enc_mask, past: dict, cross: dict):
+        feed = {"input_ids": input_ids, "encoder_attention_mask": enc_mask, **past, **cross}
         outs = self.dec.run(None, feed)
-        names = [o.name for o in self.dec.get_outputs()]
-        res = dict(zip(names, outs))
-        new_past = {}
-        for i in range(self.layers):
-            for kv in ("key", "value"):
-                new_past[f"past_key_values.{i}.decoder.{kv}"] = res[f"present.{i}.decoder.{kv}"]
-                # on the cached branch the encoder part stays what it was
-                enc = res.get(f"present.{i}.encoder.{kv}")
-                if use_cache and (enc is None or enc.shape[2] == 0):
-                    enc = past[f"past_key_values.{i}.encoder.{kv}"]
-                new_past[f"past_key_values.{i}.encoder.{kv}"] = enc
-        return res["logits"][:, -1, :].astype(np.float32), new_past
+        res = dict(zip(self.dec_outputs, outs))
+        new_past = {f"past.{i}.{kv}": res[f"present.{i}.{kv}"]
+                    for i in range(self.layers) for kv in ("key", "value")}
+        return res["logits"].astype(np.float32), new_past
 
     def translate(self, text: str, src: str, dst: str, beam_size: int = 2,
                   max_len: int = 256, repetition_penalty: float = 1.1) -> str:
@@ -198,14 +174,17 @@ class OnnxTranslator:
             return text
         ids = np.array([self._encode(text, src)], dtype=np.int64)
         mask = np.ones_like(ids)
-        enc_out = self.enc.run(None, {"input_ids": ids, "attention_mask": mask})[0]
-        enc_out = enc_out.astype(np.float32)
+        cross1 = dict(zip(self.enc_outputs,
+                          self.enc.run(None, {"input_ids": ids, "attention_mask": mask})))
         prefix = [self.start, self.ids[NLLB[dst]]]
+        empty = np.zeros((1, self.heads, 0, self.head_dim), dtype=np.float32)
+        past = {f"past.{i}.{kv}": empty for i in range(self.layers) for kv in ("key", "value")}
 
         # beam search like CTranslate2: score = sum of log-probs / length
-        logits, past = self._step(np.array([prefix], dtype=np.int64), enc_out, mask, None)
+        logits, past = self._step(np.array([prefix], dtype=np.int64), mask, past, cross1)
         beams = [(list(prefix), 0.0)]
         finished: list[tuple[float, list[int]]] = []
+        cross_n = {1: cross1}
         for _step_no in range(max_len):
             logits = logits.copy()
             for b, (toks, _s) in enumerate(beams):
@@ -236,9 +215,10 @@ class OnnxTranslator:
             past = {k2: v.take(order, axis=0) for k2, v in past.items()}
             beams = [(t, s) for t, s, _b in nxt]
             n = len(beams)
+            if n not in cross_n:
+                cross_n[n] = {k2: np.repeat(v, n, axis=0) for k2, v in cross1.items()}
             last = np.array([[t[-1]] for t, _s in beams], dtype=np.int64)
-            logits, past = self._step(last, np.repeat(enc_out[:1], n, axis=0),
-                                      np.repeat(mask[:1], n, axis=0), past)
+            logits, past = self._step(last, np.repeat(mask, n, axis=0), past, cross_n[n])
         if finished:
             best = max(finished, key=lambda f: f[0])[1]
         else:

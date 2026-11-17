@@ -2,11 +2,16 @@
 
 Used by .github/workflows/nllb-onnx.yml:
 
-    python tools/nllb_onnx_export.py fp16 <optimum export dir> <out dir>
+    python tools/nllb_onnx_export.py export <model name> <out dir>
     python tools/nllb_onnx_export.py check <model name> <out dir>
 
-fp16: encoder_model.onnx + decoder_model_merged.onnx with float16 weights and float32
-inputs / outputs (one file each, no external data), plus config.json.
+export: two graphs without control flow, fp16 weights, float32 inputs / outputs:
+  encoder_model.onnx         input_ids, attention_mask -> cross.<i>.key / .value for every
+                             decoder layer (the encoder output already projected)
+  decoder_model_merged.onnx  input_ids, encoder_attention_mask, past.<i>.key / .value (the
+                             decoder's own cache, length 0 at the start), cross.<i>.* ->
+                             logits of the last position, present.<i>.key / .value
+plus config.json.
 check: translates sample sentences with src/nllb_onnx.py (CPU) and with the CTranslate2
 model the app uses, prints both and fails when they disagree too often.
 """
@@ -17,20 +22,94 @@ import sys
 from pathlib import Path
 
 
-def fp16(src: Path, out: Path):
+def export(name: str, out: Path):
     import onnx
+    import torch
     from onnxconverter_common import float16
+    from transformers import AutoModelForSeq2SeqLM
+
+    model = AutoModelForSeq2SeqLM.from_pretrained(f"facebook/{name}", torch_dtype=torch.float32)
+    model.eval()
+    cfg = model.config
+    L, H = cfg.decoder_layers, cfg.decoder_attention_heads
+    D = cfg.d_model // H
+
+    class Enc(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.m = m
+
+        def forward(self, input_ids, attention_mask):
+            h = self.m.model.encoder(input_ids=input_ids,
+                                     attention_mask=attention_mask).last_hidden_state
+            b, n, _ = h.shape
+            out = []
+            for layer in self.m.model.decoder.layers:
+                a = layer.encoder_attn
+                out.append(a.k_proj(h).view(b, n, H, D).transpose(1, 2))
+                out.append(a.v_proj(h).view(b, n, H, D).transpose(1, 2))
+            return tuple(out)
+
+    class Dec(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.m = m
+
+        def forward(self, input_ids, encoder_attention_mask, *kv):
+            past = tuple((kv[2 * i], kv[2 * i + 1], kv[2 * L + 2 * i], kv[2 * L + 2 * i + 1])
+                         for i in range(L))
+            # only its length is used: the cross-attention keys / values come from `past`
+            dummy = encoder_attention_mask.unsqueeze(-1).to(torch.float32)
+            o = self.m.model.decoder(input_ids=input_ids, encoder_hidden_states=dummy,
+                                     encoder_attention_mask=encoder_attention_mask,
+                                     past_key_values=past, use_cache=True, return_dict=True)
+            logits = self.m.lm_head(o.last_hidden_state[:, -1, :])
+            pres = []
+            for layer in o.past_key_values:
+                pres += [layer[0], layer[1]]
+            return (logits, *pres)
+
     out.mkdir(parents=True, exist_ok=True)
-    for name in ("encoder_model.onnx", "decoder_model_merged.onnx"):
-        m = onnx.load(str(src / name), load_external_data=True)
+    tmp = out / "fp32"
+    tmp.mkdir(exist_ok=True)
+    b, n, p = 2, 7, 3
+    ids = torch.randint(5, 1000, (b, n))
+    mask = torch.ones(b, n, dtype=torch.int64)
+    cross = [f"cross.{i}.{kv}" for i in range(L) for kv in ("key", "value")]
+    past_names = [f"past.{i}.{kv}" for i in range(L) for kv in ("key", "value")]
+    pres_names = [f"present.{i}.{kv}" for i in range(L) for kv in ("key", "value")]
+    with torch.no_grad():
+        torch.onnx.export(
+            Enc(model), (ids, mask), str(tmp / "encoder_model.onnx"),
+            input_names=["input_ids", "attention_mask"], output_names=cross,
+            dynamic_axes={"input_ids": {0: "b", 1: "s"}, "attention_mask": {0: "b", 1: "s"},
+                          **{c: {0: "b", 2: "s"} for c in cross}},
+            opset_version=17, do_constant_folding=True)
+        enc_kv = Enc(model)(ids, mask)
+        dec_ids = torch.randint(5, 1000, (b, 1))
+        past = [torch.randn(b, H, p, D) for _ in range(2 * L)]
+        torch.onnx.export(
+            Dec(model), (dec_ids, mask, *past, *enc_kv), str(tmp / "decoder_model_merged.onnx"),
+            input_names=["input_ids", "encoder_attention_mask"] + past_names + cross,
+            output_names=["logits"] + pres_names,
+            dynamic_axes={"input_ids": {0: "b", 1: "t"}, "encoder_attention_mask": {0: "b", 1: "s"},
+                          **{x: {0: "b", 2: "p"} for x in past_names},
+                          **{c: {0: "b", 2: "s"} for c in cross},
+                          "logits": {0: "b"}, **{x: {0: "b", 2: "p1"} for x in pres_names}},
+            opset_version=17, do_constant_folding=True)
+    del model
+    for fname in ("encoder_model.onnx", "decoder_model_merged.onnx"):
+        m = onnx.load(str(tmp / fname), load_external_data=True)
         m = float16.convert_float_to_float16(m, keep_io_types=True, disable_shape_infer=True)
-        onnx.save(m, str(out / name))
-        print(f"{name}: {(out / name).stat().st_size / 1e6:.0f} MB")
+        onnx.save(m, str(out / fname))
+        print(f"{fname}: {(out / fname).stat().st_size / 1e6:.0f} MB")
         report(m)
-    cfg = json.loads((src / "config.json").read_text())
-    keep = {k: cfg[k] for k in ("d_model", "decoder_layers", "decoder_attention_heads",
-                                "encoder_layers", "encoder_attention_heads", "eos_token_id",
-                                "decoder_start_token_id", "pad_token_id", "vocab_size") if k in cfg}
+    shutil.rmtree(tmp, ignore_errors=True)
+    keep = {k: getattr(cfg, k) for k in ("d_model", "decoder_layers", "decoder_attention_heads",
+                                         "encoder_layers", "encoder_attention_heads",
+                                         "eos_token_id", "decoder_start_token_id",
+                                         "pad_token_id", "vocab_size")}
+    keep["format"] = 2
     (out / "config.json").write_text(json.dumps(keep, indent=2) + "\n")
 
 
@@ -94,7 +173,7 @@ def check(name: str, out: Path) -> int:
 
 if __name__ == "__main__":
     cmd = sys.argv[1]
-    if cmd == "fp16":
-        fp16(Path(sys.argv[2]), Path(sys.argv[3]))
+    if cmd == "export":
+        export(sys.argv[2], Path(sys.argv[3]))
     elif cmd == "check":
         sys.exit(check(sys.argv[2], Path(sys.argv[3])))

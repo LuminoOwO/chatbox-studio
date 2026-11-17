@@ -35,20 +35,14 @@ jobs:
       - name: Tools
         run: |
           pip install --extra-index-url https://download.pytorch.org/whl/cpu \
-            "torch==2.5.1+cpu" "transformers==4.46.3" "optimum==1.23.3" "onnx==1.17.0" \
+            "torch==2.5.1+cpu" "transformers==4.46.3" "onnx==1.17.0" \
             "onnxruntime==1.20.1" "onnxconverter-common==1.14.0" sentencepiece protobuf \
             "ctranslate2>=4.4" huggingface_hub "numpy<2.3"
-          python -c "import torch, optimum, transformers; print(torch.__version__, transformers.__version__)"
-      - name: Export to ONNX
+          python -c "import torch, transformers; print(torch.__version__, transformers.__version__)"
+      - name: Export to ONNX (fp16)
         run: |
-          optimum-cli export onnx --model "facebook/${{ matrix.model }}" \
-            --task text2text-generation-with-past --opset 17 export
-          ls -la export
+          python tools/nllb_onnx_export.py export "${{ matrix.model }}" out
           rm -rf ~/.cache/huggingface/hub/models--facebook--*
-      - name: fp16
-        run: |
-          python tools/nllb_onnx_export.py fp16 export out
-          rm -rf export
           ls -la out
       - name: Check against the CTranslate2 model
         env:
