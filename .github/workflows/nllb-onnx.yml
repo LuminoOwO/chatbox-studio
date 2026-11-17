@@ -22,16 +22,19 @@ jobs:
       fail-fast: false
       matrix:
         model: [nllb-200-distilled-600M, nllb-200-distilled-1.3B]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Free disk space
+      - name: Free disk space, add swap (the 1.3B model needs more than the 16 GB RAM)
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /swapfile2 && sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2 && sudo swapon /swapfile2
+          free -h; df -h /
       - name: Tools
         run: |
           pip install --extra-index-url https://download.pytorch.org/whl/cpu \
