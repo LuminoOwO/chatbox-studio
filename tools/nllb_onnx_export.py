@@ -103,6 +103,8 @@ def export(name: str, out: Path):
     del model
     for fname in ("encoder_model.onnx", "decoder_model_merged.onnx"):
         m = onnx.load(str(tmp / fname), load_external_data=True)
+        if fname.startswith("decoder"):
+            share_output_weights(m, cfg.vocab_size, cfg.d_model)
         m = float16.convert_float_to_float16(m, keep_io_types=True, disable_shape_infer=True)
         onnx.save(m, str(out / fname))
         print(f"{fname}: {(out / fname).stat().st_size / 1e6:.0f} MB")
@@ -114,6 +116,33 @@ def export(name: str, out: Path):
                                          "pad_token_id", "vocab_size")}
     keep["format"] = 2
     (out / "config.json").write_text(json.dumps(keep, indent=2) + "\n")
+
+
+def share_output_weights(m, vocab: int, d: int):
+    """The exporter turns the output layer into MatMul(x, <transposed copy of the word
+    embedding>). Point it at the embedding itself (Gemm with transB) and drop the copy."""
+    import numpy as np
+    from onnx import helper, numpy_helper
+    inits = {t.name: t for t in m.graph.initializer}
+    emb = next((t for t in m.graph.initializer if list(t.dims) == [vocab, d]), None)
+    for node in m.graph.node:
+        if node.op_type != "MatMul" or node.input[1] not in inits:
+            continue
+        w = inits[node.input[1]]
+        if list(w.dims) != [d, vocab] or emb is None:
+            continue
+        a, b = numpy_helper.to_array(w), numpy_helper.to_array(emb)
+        if not np.array_equal(a[:, :64], b[:64, :].T):
+            raise SystemExit("the output layer isn't the transposed word embedding")
+        gemm = helper.make_node("Gemm", [node.input[0], emb.name], list(node.output),
+                                name=node.name + "_shared", transB=1)
+        idx = list(m.graph.node).index(node)
+        m.graph.node.remove(node)
+        m.graph.node.insert(idx, gemm)
+        m.graph.initializer.remove(w)
+        print(f"   output layer shares the word embedding ({a.nbytes / 1e6:.0f} MB saved)")
+        return
+    print("   (no transposed embedding copy found)")
 
 
 def report(m):
