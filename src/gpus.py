@@ -73,21 +73,23 @@ def nvidia() -> list[GPU]:
     return gpus
 
 
-# PCI device ids of current Radeon cards -> (name, gfx target). Others get the lspci /
-# Windows name and are checked by ROCm itself.
-AMD_IDS = {
-    "7550": ("AMD Radeon RX 9070 / 9070 XT", "gfx1201"),
-    "7590": ("AMD Radeon RX 9060 XT", "gfx1200"),
+# PCI device ids of Radeon chips -> (name, gfx target), generated from pci.ids (amd_ids.py).
+# A few current cards get a shorter name.
+from amd_ids import AMD_IDS as _GENERATED  # noqa: E402
+
+AMD_IDS = dict(_GENERATED)
+AMD_IDS.update({
     "744c": ("AMD Radeon RX 7900 XT / XTX", "gfx1100"),
-    "7448": ("AMD Radeon Pro W7900", "gfx1100"),
     "747e": ("AMD Radeon RX 7800 XT / 7700 XT", "gfx1101"),
     "7480": ("AMD Radeon RX 7600 / 7600 XT", "gfx1102"),
     "73bf": ("AMD Radeon RX 6800 / 6900 XT", "gfx1030"),
-    "73df": ("AMD Radeon RX 6700 XT", "gfx1031"),
+    "73df": ("AMD Radeon RX 6700 / 6700 XT / 6750 XT", "gfx1031"),
     "73ff": ("AMD Radeon RX 6600 / 6600 XT", "gfx1032"),
-}
-ROCM_ARCHS = {"gfx1030", "gfx1100", "gfx1101", "gfx1102", "gfx1200", "gfx1201", "gfx1150",
-              "gfx1151", "gfx906", "gfx908", "gfx90a", "gfx942", "gfx950"}
+})
+# The gfx targets the AMD (ROCm) build of CTranslate2 is compiled for (its
+# prepare_build_environment_*_rocm.sh, v4.8.4). Other chips can't use it.
+ROCM_ARCHS = {"gfx1030", "gfx1100", "gfx1101", "gfx1102", "gfx1150", "gfx1151", "gfx1200",
+              "gfx1201"}
 # Linux only: chips ROCm runs on when told to treat them like a close relative
 # (HSA_OVERRIDE_GFX_VERSION). Mostly APUs and the smaller RDNA2 / RDNA3 cards.
 ROCM_OVERRIDE = {"gfx1031": "10.3.0", "gfx1032": "10.3.0", "gfx1034": "10.3.0",
@@ -101,7 +103,9 @@ AMD_APU_ARCHS = {"gfx90c", "gfx1035", "gfx1036", "gfx1037", "gfx1103", "gfx1150"
 def rocm_ok(arch: str) -> bool:
     """Can the ROCm engine run on this gfx target (on this OS)?"""
     if not arch:
-        return True                    # unknown card: let ROCm decide
+        # unknown chip: on Linux let ROCm decide; on Windows ROCm only runs on the few
+        # chips it was built for, so Vulkan + DirectML take an unknown one
+        return not IS_WINDOWS
     return arch in ROCM_ARCHS or (not IS_WINDOWS and arch in ROCM_OVERRIDE)
 
 
@@ -303,6 +307,83 @@ def vulkan(include_cpu: bool = False) -> list[GPU]:
         out.append(GPU(int(d["index"]), name or "Graphics", local, "vulkan",
                        maker=MAKERS.get(int(d.get("vendor_id", 0)), "other"),
                        integrated=integrated, device_id=int(d.get("device_id", 0))))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# DirectML (Windows): the adapters in DXGI order - DirectML's device_id is this index
+# --------------------------------------------------------------------------- #
+_dxgi_cache: Optional[list] = None
+
+
+def dxgi_adapters() -> list[dict]:
+    """[{index, name, vendor_id, device_id, vram_mb, software}] in IDXGIFactory1::EnumAdapters1
+    order (what ONNX Runtime's DirectML uses as device_id). Empty off Windows."""
+    global _dxgi_cache
+    if _dxgi_cache is not None:
+        return _dxgi_cache
+    out: list[dict] = []
+    if IS_WINDOWS:
+        try:
+            out = _dxgi_enum()
+        except Exception:
+            out = []
+    _dxgi_cache = out
+    return out
+
+
+def _dxgi_enum() -> list[dict]:
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+    class LUID(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", ctypes.c_long)]
+
+    class DESC1(ctypes.Structure):
+        _fields_ = [("Description", ctypes.c_wchar * 128), ("VendorId", wintypes.UINT),
+                    ("DeviceId", wintypes.UINT), ("SubSysId", wintypes.UINT),
+                    ("Revision", wintypes.UINT), ("DedicatedVideoMemory", ctypes.c_size_t),
+                    ("DedicatedSystemMemory", ctypes.c_size_t),
+                    ("SharedSystemMemory", ctypes.c_size_t), ("AdapterLuid", LUID),
+                    ("Flags", wintypes.UINT)]
+
+    def call(obj, index, *args):
+        """COM method `index` of obj's vtable; returns the HRESULT."""
+        vtbl = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        types = [ctypes.c_void_p] + [type(a) for a in args]
+        fn = ctypes.WINFUNCTYPE(ctypes.c_long, *types)(vtbl[index])
+        return fn(obj, *args)
+
+    iid = GUID(0x770AAE78, 0xF26F, 0x4DBA,
+               (ctypes.c_ubyte * 8)(0xA8, 0x29, 0x25, 0x3C, 0x83, 0xD1, 0xB3, 0x87))
+    factory = ctypes.c_void_p()
+    dxgi = ctypes.WinDLL("dxgi.dll")
+    if dxgi.CreateDXGIFactory1(ctypes.byref(iid), ctypes.byref(factory)) < 0:
+        return []
+    out = []
+    try:
+        i = 0
+        while i < 32:
+            adapter = ctypes.c_void_p()
+            # IDXGIFactory1::EnumAdapters1 (vtable 12); DXGI_ERROR_NOT_FOUND ends the list
+            if call(factory, 12, wintypes.UINT(i), ctypes.byref(adapter)) < 0:
+                break
+            d = DESC1()
+            try:
+                if call(adapter, 10, ctypes.byref(d)) >= 0:          # IDXGIAdapter1::GetDesc1
+                    out.append({"index": i, "name": d.Description.strip(),
+                                "vendor_id": int(d.VendorId), "device_id": int(d.DeviceId),
+                                "vram_mb": int(d.DedicatedVideoMemory) // 2**20,
+                                "software": bool(d.Flags & 2)})       # DXGI_ADAPTER_FLAG_SOFTWARE
+            finally:
+                call(adapter, 2)                                     # Release
+            i += 1
+    finally:
+        call(factory, 2)
     return out
 
 

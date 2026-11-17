@@ -243,21 +243,28 @@ def run_gui(mode: str) -> int:
     p1l.addWidget(scroll)
     lay.addWidget(hint(pc_line()))
 
-    def dev_combo(current, same_label=None, ct2=False):
-        """ct2: for the translator / smart AI, which can't use Vulkan devices."""
+    def dev_combo(current, same_label=None, ct2=False, dml=False):
+        """ct2: for the translator / smart AI, which can't use Vulkan devices - except the
+        translator on Windows (dml=True), which runs on them with DirectML."""
         box = QComboBox()
         if same_label:
             box.addItem(same_label, "same")
         for g in hw.gpus:
-            if ct2 and g.vendor == "vulkan":
+            if ct2 and g.vendor == "vulkan" and not (dml and paths.IS_WINDOWS):
                 continue
             eng = {"nvidia": "NVIDIA CUDA", "amd": "AMD ROCm", "vulkan": "Vulkan"}[g.vendor]
+            if g.vendor == "vulkan" and ct2:
+                eng = "DirectML"
             mem = f"{g.vram_mb / 1024:.0f} GB" + (" shared" if g.integrated else "")
             box.addItem(f"{short_name(g)} ({mem}, {eng})", K.gpu_key(g))
             if g.vendor == "vulkan":
-                box.setItemData(box.count() - 1, "Vulkan (whisper.cpp): works with the normal "
-                                "graphics driver on any chip. Speech recognition only - the "
-                                "translator then runs on the CPU.", Qt.ToolTipRole)
+                box.setItemData(box.count() - 1, (
+                    "DirectML: works with the normal graphics driver on any card."
+                    if ct2 else
+                    "Vulkan (whisper.cpp): works with the normal graphics driver on any chip. "
+                    + ("The translator runs on it too, with DirectML." if paths.IS_WINDOWS
+                       else "Speech recognition only - the translator then runs on the CPU.")),
+                    Qt.ToolTipRole)
         box.addItem("CPU (no graphics card)", "cpu")
         box.setCurrentIndex(max(0, box.findData(current)))
         return box
@@ -314,7 +321,7 @@ def run_gui(mode: str) -> int:
         nllb_box.addItem(f"{label}   ·   {mb(size)}", name)
     nllb_box.setCurrentIndex(max(0, nllb_box.findData(want.nllb or K.NLLB[0][0])))
     dev_row("Model", nllb_box)
-    tr_dev = dev_combo(want.tr_dev, "Same as speech recognition", ct2=True)
+    tr_dev = dev_combo(want.tr_dev, "Same as speech recognition", ct2=True, dml=True)
     dev_row("Runs on", tr_dev)
 
     # graphics card support + extras

@@ -1,0 +1,67 @@
+# Exports Meta's NLLB-200 translators to ONNX (fp16 weights) for DirectML - the translator
+# on any graphics card on Windows - checks them against the CTranslate2 models the app uses,
+# and publishes them as the release "models-nllb-onnx-1". The setup downloads them from
+# there (src/nllb_onnx.py). NLLB-200 is © Meta, CC-BY-NC 4.0.
+name: NLLB for DirectML
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/nllb-onnx.yml", "tools/nllb_onnx_export.py"]
+
+permissions:
+  contents: write
+
+env:
+  TAG: models-nllb-onnx-1
+
+jobs:
+  export:
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [nllb-200-distilled-600M, nllb-200-distilled-1.3B]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Tools
+        run: |
+          pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install "transformers==4.46.3" "optimum[exporters]==1.23.3" "onnx==1.17.0" \
+            "onnxruntime==1.20.1" "onnxconverter-common==1.14.0" sentencepiece protobuf \
+            "ctranslate2>=4.4" huggingface_hub numpy
+      - name: Export to ONNX
+        run: |
+          optimum-cli export onnx --model "facebook/${{ matrix.model }}" \
+            --task text2text-generation-with-past --opset 17 export
+          ls -la export
+          rm -rf ~/.cache/huggingface/hub/models--facebook--*
+      - name: fp16
+        run: |
+          python tools/nllb_onnx_export.py fp16 export out
+          rm -rf export
+          ls -la out
+      - name: Check against the CTranslate2 model
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/data
+        run: python tools/nllb_onnx_export.py check "${{ matrix.model }}" out
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+              --title "NLLB translators for DirectML" \
+              --notes "Meta's NLLB-200 translators exported to ONNX (fp16) for the translator on any graphics card on Windows (DirectML). Made by .github/workflows/nllb-onnx.yml. NLLB-200 © Meta, licensed CC-BY-NC 4.0 (https://github.com/facebookresearch/fairseq/tree/nllb)."
+          for f in encoder_model.onnx decoder_model_merged.onnx config.json; do
+            cp "out/$f" "${{ matrix.model }}-$f"
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${{ matrix.model }}-$f"
+          done

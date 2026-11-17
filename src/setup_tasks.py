@@ -6,7 +6,10 @@ Steps the setup window runs in a separate process (so freshly installed packages
   setup_tasks.py smart <model>        download the smart translation model
   setup_tasks.py ggml <model>         download a Whisper model for the Vulkan engine
   setup_tasks.py vulkan [--fresh]     install the Vulkan speech engine (whisper.cpp)
-  setup_tasks.py rm-whisper|rm-nllb|rm-smart|rm-ggml <model>, rm-vulkan
+  setup_tasks.py nllb-onnx <model>    download the translator's DirectML (ONNX) version
+  setup_tasks.py directml             ONNX Runtime with DirectML (Windows)
+  setup_tasks.py rm-whisper|rm-nllb|rm-smart|rm-ggml|rm-nllb-onnx <model>, rm-vulkan,
+                 rm-directml
   setup_tasks.py check <groups...>    check that the libraries load
 
 Prints "PCT <n>" for progress and normal lines for the log. Exit code 0 = done,
@@ -325,6 +328,67 @@ def rm_rocm() -> int:
     return 0
 
 
+DIRECTML_VERSION = "1.24.4"
+
+
+def _directml_probe() -> "subprocess.CompletedProcess":
+    """Loads ONNX Runtime from the DirectML folder the way the helper process does."""
+    import subprocess
+    import devices
+    code = ("import sys; sys.path.insert(0, %r); import onnxruntime; "
+            "print(','.join(onnxruntime.get_available_providers()))"
+            % str(devices.directml_engine_dir()))
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                          **paths.hidden_subprocess_kwargs())
+
+
+def directml(fresh: bool) -> int:
+    """ONNX Runtime with DirectML, into its own folder (the app's onnxruntime stays)."""
+    import devices
+    target = devices.directml_engine_dir()
+    if fresh and target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True, exist_ok=True)
+    say(f"Installing ONNX Runtime with DirectML {DIRECTML_VERSION} (the translator on any "
+        "graphics card) ...")
+    # --no-deps: numpy, protobuf, flatbuffers & co. come with the app already
+    if _pip(["install", "--no-deps", "--target", str(target), "--upgrade",
+             f"onnxruntime-directml=={DIRECTML_VERSION}"]) != 0:
+        return 1
+    r = _directml_probe()
+    if r.returncode != 0:
+        err = (r.stderr.strip().splitlines() or [""])[-1]
+        if any(b in r.stderr for b in BLOCKED):
+            say(f"BLOCKED directml: {err}")
+            return 3
+        say(f"⚠ DirectML doesn't load ({err}). The translator runs on the CPU until this "
+            "is fixed.")
+        return 5
+    if "DmlExecutionProvider" not in r.stdout:
+        say("⚠ ONNX Runtime loads, but without DirectML - update Windows and the graphics "
+            "driver. The translator runs on the CPU until then.")
+        return 5
+    say("✓ DirectML works.")
+    pct(100)
+    return 0
+
+
+def rm_directml() -> int:
+    import devices
+    shutil.rmtree(devices.directml_engine_dir(), ignore_errors=True)
+    say("Removed DirectML.")
+    pct(100)
+    return 0
+
+
+def nllb_onnx(name: str):
+    import nllb_onnx as N
+    say(f"Downloading the DirectML version of the translator ({name}, "
+        f"~{N.size_mb(name)} MB) ...")
+    N.download(name, pct)
+    say("Translator for DirectML ready.")
+
+
 CHECKS = {
     "core": "import numpy, ctranslate2, onnxruntime, sounddevice, sentencepiece, faster_whisper",
     "media": ("import pycaw.pycaw; from winrt.windows.media.control import "
@@ -362,6 +426,12 @@ def check(groups: list[str]) -> int:
             say(f"✓ rocm ({n} card(s))")
         else:
             say(f"✗ rocm: {(r.stderr.strip().splitlines() or ['sees no card'])[-1]}")
+    if "directml" in groups:
+        r = _directml_probe()
+        if r.returncode == 0 and "DmlExecutionProvider" in r.stdout:
+            say("✓ directml")
+        else:
+            say(f"✗ directml: {(r.stderr.strip().splitlines() or ['DirectML not available'])[-1]}")
     if "vulkan" in groups:
         import whispercpp as W
         say("✓ vulkan" if W.installed() else "✗ vulkan: the engine is missing")
@@ -396,6 +466,16 @@ def main(argv: list[str]) -> int:
             return rm_vulkan()
         elif cmd == "check":
             return check(args)
+        elif cmd == "directml":
+            return directml("--fresh" in args)
+        elif cmd == "rm-directml":
+            return rm_directml()
+        elif cmd == "nllb-onnx":
+            nllb_onnx(args[0])
+        elif cmd == "rm-nllb-onnx":
+            import nllb_onnx as N
+            N.remove(args[0])
+            say(f"Removed the DirectML version of {args[0]}.")
         elif cmd == "rocm":
             return rocm("--fresh" in args)
         elif cmd == "rm-rocm":

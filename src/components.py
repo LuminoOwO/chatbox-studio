@@ -121,9 +121,9 @@ def weak_igpu(g: GPU) -> bool:
 
 def default_gpu(hw: Hardware) -> Optional[GPU]:
     """The device the setup suggests for speech recognition:
-    NVIDIA (CUDA) > AMD card (ROCm on Windows, Vulkan on Linux - needs no extra system
-    packages there) > other discrete chips via Vulkan (Intel Arc) > AMD APU / Intel Xe
-    graphics via Vulkan > CPU. With two cards of one kind, the smaller one keeps the main
+    NVIDIA (CUDA) > AMD card via Vulkan (any Radeon, no extra system packages; on Windows
+    the translator follows it with DirectML) > AMD card via ROCm > other discrete chips via
+    Vulkan (Intel Arc) > AMD APU / Intel Xe graphics via Vulkan > CPU. With two cards of one kind, the smaller one keeps the main
     card free for VRChat."""
     def pick(pool):
         if not pool:
@@ -136,7 +136,7 @@ def default_gpu(hw: Hardware) -> Optional[GPU]:
     vk_amd = [g for g in vk if g.maker == "amd"]
     igpu = [g for g in big if g.integrated and not weak_igpu(g)
             and (g.vendor == "vulkan" or IS_WINDOWS)]
-    order = [nv] + ([rocm, vk_amd] if IS_WINDOWS else [vk_amd, rocm]) + [vk, igpu]
+    order = [nv, vk_amd, rocm, vk, igpu]
     for pool in order:
         g = pick(pool)
         if g is not None:
@@ -209,8 +209,10 @@ GROUPS = [
     Group("vulkan", "Graphics support for any GPU (Vulkan)",
           "Runs speech recognition on AMD and Intel graphics - also the graphics inside your "
           "processor (APU, laptop) and Radeon cards ROCm doesn't support. Uses your normal "
-          "graphics driver, nothing else to install. The translator then runs on the CPU.",
-          15, 40, None),
+          "graphics driver, nothing else to install. "
+          + ("The translator runs on the same card with DirectML." if IS_WINDOWS
+             else "The translator then runs on the CPU."),
+          40 if IS_WINDOWS else 15, 110 if IS_WINDOWS else 40, None),
     Group("media", "Now playing, program audio and active app",
           "Song and artist from Spotify, YouTube and players, which program plays sound, "
           "audio devices.", 8, 15, "media.txt",
@@ -254,8 +256,8 @@ class Choice:
         vendor = raw.split(":")[0] if ":" in raw else "cpu"
         if vendor != "cpu" and _accel_group(vendor) not in self.groups:
             return "cpu"
-        if vendor == "vulkan" and role in ("translator", "smart"):
-            return "cpu"
+        if vendor == "vulkan" and (role == "smart" or (role == "translator" and not IS_WINDOWS)):
+            return "cpu"                       # Windows: the translator uses DirectML there
         return raw
 
     def roles(self) -> list[tuple[str, str, str, int]]:
@@ -265,8 +267,10 @@ class Choice:
                 ggml_vram(self.whisper) if sp.startswith("vulkan:")
                 else _vram(WHISPER, self.whisper, 2200))]
         if self.nllb:
-            out.append(("translator", "translator", self.spec("translator"),
-                        _vram(NLLB, self.nllb, 1600)))
+            tr = self.spec("translator")
+            out.append(("translator", "translator", tr,
+                        _dml_vram(self.nllb) if tr.startswith("vulkan:")
+                        else _vram(NLLB, self.nllb, 1600)))
         if self.smart:
             out.append(("smart", "smart AI", self.spec("smart"), _vram(SMART, self.smart, 3400)))
         if "earshot" in self.groups and self.listen_dev not in ("same", ""):
@@ -279,14 +283,16 @@ class Choice:
     def vendors(self) -> set:
         """Graphics card makers the chosen devices use (before checking ticked support)."""
         out = set()
-        for raw, ct2 in ((self.gpu, False), (self.tr_dev if self.nllb else "", True),
-                         (self.smart_dev if self.smart else "", True),
-                         (self.listen_dev if "earshot" in self.groups else "", False)):
+        for role, raw in (("speech", self.gpu), ("translator", self.tr_dev if self.nllb else ""),
+                          ("smart", self.smart_dev if self.smart else ""),
+                          ("listen", self.listen_dev if "earshot" in self.groups else "")):
             raw = self.gpu if raw == "same" else raw
             if raw and ":" in raw:
                 v = raw.split(":")[0]
-                if not (ct2 and v == "vulkan"):
-                    out.add(v)
+                # Vulkan can't run the smart AI; the translator only on Windows (DirectML)
+                if v == "vulkan" and (role == "smart" or (role == "translator" and not IS_WINDOWS)):
+                    continue
+                out.add(v)
         return out
 
     def per_gpu(self) -> dict:
@@ -308,6 +314,16 @@ class Choice:
         if self.vendor == "amd" and "rocm" in self.groups:
             return "rocm"
         return "cpu"
+
+
+def _dml_vram(name: str) -> int:
+    import nllb_onnx
+    return nllb_onnx.VRAM.get(name, 2000)
+
+
+def uses_directml(c: "Choice") -> bool:
+    """Windows: the translator runs on a Vulkan device, i.e. with DirectML."""
+    return IS_WINDOWS and bool(c.nllb) and c.spec("translator").startswith("vulkan:")
 
 
 def _vram(table, name, default) -> int:
@@ -350,6 +366,8 @@ def recommend(hw: Hardware, state: Optional[dict] = None) -> Choice:
         c.listen_model = state.get("listen_model") or "small"
         if state.get("backend") == "rocm":            # 1.22/1.23: AMD support was "the" backend
             c.groups.add("rocm")
+        if IS_WINDOWS:
+            _windows_amd_to_vulkan(hw, c, state)
         return c
     c.groups = {"core", "media", "vr"}      # Earshot (experimental) only when you ask for it
     if g is not None:
@@ -366,6 +384,43 @@ def recommend(hw: Hardware, state: Optional[dict] = None) -> Choice:
         c.nllb = "nllb-200-distilled-600M"
     c.smart = None                          # big: only when you ask for it
     return _from_settings(hw, c)
+
+
+def _vulkan_twin(hw: Hardware, g: Optional[GPU], device_id: int = 0) -> str:
+    did = getattr(g, "device_id", 0) or device_id
+    for v in hw.gpus:
+        if v.vendor == "vulkan" and did and v.device_id == did:
+            return gpu_key(v)
+    return ""
+
+
+def _windows_amd_to_vulkan(hw: Hardware, c: Choice, state: dict):
+    """Windows, before 1.33: Radeon cards were set to AMD ROCm, which only runs on a few of
+    them - when it failed, everything ran on the CPU. Move those to the card's Vulkan entry
+    (speech on Vulkan, the translator with DirectML). A ROCm setup that works stays."""
+    import devices
+    old = state.get("gpu") or ""
+    for attr in ("gpu", "tr_dev", "listen_dev"):
+        raw = old if attr == "gpu" else (state.get(attr) or "same")
+        if not raw.startswith("amd:"):
+            continue
+        g = find_gpu(hw, raw)
+        if g is not None and "rocm" in c.groups and devices.rocm_installed() and \
+                G.rocm_ok(g.arch):
+            continue                                 # ROCm runs this card
+        twin = _vulkan_twin(hw, g)
+        if not twin:                                 # the card isn't listed for ROCm anymore
+            vk_amd = [v for v in hw.gpus if v.vendor == "vulkan" and v.maker == "amd"
+                      and not v.integrated]
+            twin = gpu_key(vk_amd[0]) if len(vk_amd) == 1 else ""
+        if twin:
+            setattr(c, attr, twin)
+            c.groups.add("vulkan")
+            if attr == "gpu" and "rocm" in c.groups and not any(
+                    getattr(c, a2).startswith("amd:") for a2 in ("tr_dev", "listen_dev")):
+                c.groups.discard("rocm")
+    if c.gpu.startswith("vulkan:"):
+        c.groups.add("vulkan")
 
 
 PRESETS = ("standard", "speech", "keep", "custom")
@@ -759,6 +814,30 @@ def plan(hw: Hardware, want: Choice, have: Choice, update: bool = False,
     if want.nllb:
         add_model("nllb", "translator", want.nllb, NLLB, nllb_installed(want.nllb),
                   paths.models_dir() / want.nllb)
+    # Windows: the translator on a Vulkan device runs with DirectML (own engine + model)
+    import devices
+    import nllb_onnx
+    dml = uses_directml(want)
+    dml_was = devices.directml_installed()
+    if dml and (fresh or not dml_was):
+        steps.append(Step("Installing DirectML (the translator on your graphics card)",
+                          tasks + ["directml"] + (["--fresh"] if fresh else []), 25, "task",
+                          0 if dml_was and not fresh else 70, 25))
+    elif not dml and dml_was:
+        steps.append(Step("Removing DirectML", tasks + ["rm-directml"], 2, "task", -70))
+    if dml:
+        if fresh and nllb_onnx.is_installed(want.nllb):
+            steps.append(Step("Removing the old DirectML translator",
+                              tasks + ["rm-nllb-onnx", want.nllb], 1, "task",
+                              -nllb_onnx.size_mb(want.nllb)))
+        if fresh or not nllb_onnx.is_installed(want.nllb):
+            mb = nllb_onnx.size_mb(want.nllb)
+            steps.append(Step(f"Downloading the translator for DirectML ({want.nllb}, ~{mb} MB)",
+                              tasks + ["nllb-onnx", want.nllb], mb, "task", mb, mb))
+    elif want.nllb and nllb_onnx.is_installed(want.nllb):
+        steps.append(Step("Removing the DirectML translator (not used anymore)",
+                          tasks + ["rm-nllb-onnx", want.nllb], 1, "task",
+                          -nllb_onnx.size_mb(want.nllb)))
     if want.smart:
         add_model("smart", "smart translation model", want.smart, SMART,
                   smart_installed(want.smart), paths.models_dir() / f"smart-{want.smart}")
@@ -789,9 +868,10 @@ def plan(hw: Hardware, want: Choice, have: Choice, update: bool = False,
                           not want.spec("speech").startswith("vulkan:")),
                       _safe(lambda: whisper_cache(want.listen_model)))
     v = want.vendors()
-    checks = sorted(want.groups - ({"cuda"} if "nvidia" not in v else set())
-                    - ({"rocm"} if "amd" not in v else set())
-                    - ({"vulkan"} if "vulkan" not in v else set()))
+    checks = sorted((want.groups - ({"cuda"} if "nvidia" not in v else set())
+                     - ({"rocm"} if "amd" not in v else set())
+                     - ({"vulkan"} if "vulkan" not in v else set()))
+                    | ({"directml"} if dml else set()))
     steps.append(Step("Checking that everything loads", tasks + ["check", *checks], 2, "task"))
     return steps
 

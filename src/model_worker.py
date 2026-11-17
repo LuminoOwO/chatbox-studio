@@ -1,9 +1,9 @@
 """
-Helper process that runs AI models with another build of CTranslate2 (the AMD / ROCm
-one). Started by workers.py; talks over stdin/stdout (length-prefixed pickle), and
+Helper process that runs AI models with another engine build: the AMD (ROCm) build of
+CTranslate2, or ONNX Runtime with DirectML (the translator on any Windows graphics card). Started by workers.py; talks over stdin/stdout (length-prefixed pickle), and
 writes its log to stderr.
 
-    model_worker.py rocm
+    model_worker.py rocm | directml
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ import devices  # noqa: E402
 
 if backend == "rocm":
     sys.path.insert(0, str(devices.rocm_engine_dir()))   # the ROCm build of CTranslate2
+elif backend == "directml":
+    sys.path.insert(0, str(devices.directml_engine_dir()))  # ONNX Runtime with DirectML
 
 out = sys.stdout.buffer
 sys.stdout = sys.stderr                  # print() and libraries log to stderr, not the pipe
@@ -66,9 +68,14 @@ def main():
                 objects.pop(payload[0], None)
                 reply(rid, True, None)
             elif op == "ping":
-                import ctranslate2
-                reply(rid, True, {"devices": ctranslate2.get_cuda_device_count(),
-                                  "file": ctranslate2.__file__})
+                if backend == "directml":
+                    import onnxruntime
+                    reply(rid, True, {"providers": onnxruntime.get_available_providers(),
+                                      "file": onnxruntime.__file__})
+                else:
+                    import ctranslate2
+                    reply(rid, True, {"devices": ctranslate2.get_cuda_device_count(),
+                                      "file": ctranslate2.__file__})
             else:
                 reply(rid, False, f"unknown op {op}")
         except Exception as e:

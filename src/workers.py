@@ -29,16 +29,39 @@ HERE = Path(__file__).resolve().parent
 
 
 def make(kind: str, spec: str, *args, log: Callable[[str], None] = print):
+    if devices.is_remote(spec) and paths.IS_WINDOWS and not devices.rocm_installed():
+        twin = devices.vulkan_twin(spec)
+        if twin and devices.supports(twin, kind) and (kind != "whisper" or _vulkan_ok()):
+            log(f"AMD ROCm isn't installed - {devices.label(spec)} runs through "
+                f"{'DirectML' if kind == 'nllb' else 'Vulkan'} instead.")
+            spec = twin
     if devices.is_remote(spec):
         return worker("rocm", log).load(kind, spec, *args)
+    if devices.runs_on_directml(spec, kind):
+        try:
+            return worker("directml", log).load(kind, spec, *args)
+        except WorkerError as e:
+            log(f"The translator couldn't use {devices.label(spec, kind)} with DirectML ({e}) "
+                "- it runs on the CPU.")
+            spec = "cpu"
     return build_local(kind, spec, *args, log=log)
+
+
+def _vulkan_ok() -> bool:
+    try:
+        return devices.vulkan_installed()
+    except Exception:
+        return False
 
 
 def build_local(kind: str, spec: str, *args, log: Callable[[str], None] = print):
     if not devices.supports(spec, kind):
         log(f"The {'translator' if kind == 'nllb' else 'smart AI'} can't use "
-            f"{devices.label(spec)} (Vulkan works for speech recognition only) - it runs on "
-            "the CPU.")
+            f"{devices.label(spec)} ("
+            + ("on Windows, the translator runs on it once 'Graphics support for any GPU' is "
+               "installed again in the setup" if paths.IS_WINDOWS and kind == "nllb"
+               else "Vulkan works for speech recognition only")
+            + ") - it runs on the CPU.")
         spec = "cpu"
     if kind == "whisper" and devices.parse(spec)[0] == "vulkan":
         import whispercpp
@@ -48,6 +71,10 @@ def build_local(kind: str, spec: str, *args, log: Callable[[str], None] = print)
         from engine import Transcriber
         model, compute = args
         return Transcriber(model, spec, compute, log)
+    if kind == "nllb" and devices.parse(spec)[0] == "vulkan":
+        import nllb_onnx                       # in the DirectML helper process
+        (name,) = args
+        return nllb_onnx.OnnxTranslator(name, spec, log)
     if kind == "nllb":
         import translator
         (name,) = args
@@ -131,6 +158,7 @@ class WorkerError(RuntimeError):
 class Worker:
     def __init__(self, backend: str, log: Callable[[str], None]):
         self.backend = backend
+        self.what = "DirectML" if backend == "directml" else "AMD"
         self.log = log
         exe = sys.executable
         if paths.IS_WINDOWS and Path(exe).name.lower() == "pythonw.exe":
@@ -151,12 +179,13 @@ class Worker:
         for raw in self.proc.stderr:
             line = raw.decode("utf-8", "replace").rstrip()
             if line:
-                self.log(f"[AMD] {line}" if self.backend == "rocm" else line)
+                self.log(f"[AMD] {line}" if self.backend == "rocm" else
+                         f"[DirectML] {line}" if self.backend == "directml" else line)
 
     def request(self, op: str, *payload):
         with self.lock:
             if not self.alive():
-                raise WorkerError("the AMD helper process has stopped (see the log)")
+                raise WorkerError(f"the {self.what} helper process has stopped (see the log)")
             self.next_id += 1
             data = pickle.dumps((self.next_id, op, payload), protocol=pickle.HIGHEST_PROTOCOL)
             try:
@@ -164,11 +193,11 @@ class Worker:
                 self.proc.stdin.flush()
                 head = self.proc.stdout.read(4)
                 if len(head) < 4:
-                    raise WorkerError("the AMD helper process stopped (see the log)")
+                    raise WorkerError(f"the {self.what} helper process stopped (see the log)")
                 (n,) = struct.unpack("<I", head)
                 body = self.proc.stdout.read(n)
             except (OSError, ValueError) as e:
-                raise WorkerError(f"the AMD helper process stopped ({e})")
+                raise WorkerError(f"the {self.what} helper process stopped ({e})")
         _rid, ok, value = pickle.loads(body)
         if not ok:
             raise WorkerError(value)

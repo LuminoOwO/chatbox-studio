@@ -7,8 +7,9 @@ A device is written as a short string:
     "amd:0"      AMD card 0, ROCm - runs in a helper process (see workers.py), because
                  one Python process can only load one build of CTranslate2
     "vulkan:2"   Vulkan device 2 (whisper.cpp, see whispercpp.py): any other graphics chip -
-                 AMD without ROCm, APUs, Intel. Speech recognition only; the translator
-                 and the smart AI then run on the CPU
+                 AMD without ROCm, APUs, Intel. Speech recognition; on Windows the
+                 translator runs on the same chip with DirectML (nllb_onnx.py, in a helper
+                 process). The smart AI runs on the CPU
     "same"       (translator, smart AI, Earshot) the device of the speech model
 """
 
@@ -34,9 +35,71 @@ def vulkan_installed() -> bool:
     return whispercpp.installed()
 
 
+def directml_engine_dir() -> Path:
+    """ONNX Runtime with DirectML (Windows), in its own folder (pip --target): the app's
+    own onnxruntime (voice detection) is another build and version."""
+    return paths.data_dir() / "engines" / "directml"
+
+
+def directml_installed() -> bool:
+    return paths.IS_WINDOWS and (directml_engine_dir() / "onnxruntime" / "__init__.py").exists()
+
+
 def supports(spec: str, kind: str) -> bool:
     """Can a model of this kind ("whisper", "nllb", "smart") run on the device?"""
-    return parse(spec)[0] != "vulkan" or kind == "whisper"
+    if parse(spec)[0] != "vulkan" or kind == "whisper":
+        return True
+    return kind == "nllb" and directml_installed()
+
+
+def runs_on_directml(spec: str, kind: str) -> bool:
+    """The translator on a Vulkan device, on Windows: DirectML runs it."""
+    return kind == "nllb" and parse(spec)[0] == "vulkan" and directml_installed()
+
+
+def _gpu_of(spec: str):
+    vendor, idx = parse(spec)
+    import gpus
+    try:
+        pool = gpus.vulkan() if vendor == "vulkan" else gpus.amd() if vendor == "amd" else []
+    except Exception:
+        pool = []
+    return next((g for g in pool if g.index == idx), None)
+
+
+def dml_index(spec: str) -> int:
+    """DirectML's device_id for a Vulkan / AMD device: the DXGI adapter with the same PCI
+    device id (the name when the id isn't known). -1 = not found."""
+    import gpus
+    g = _gpu_of(spec)
+    adapters = [a for a in gpus.dxgi_adapters() if not a["software"]]
+    if g is None or not adapters:
+        return -1
+    for a in adapters:
+        if getattr(g, "device_id", 0) and a["device_id"] == g.device_id:
+            return a["index"]
+    key = g.name.lower().replace("amd ", "")
+    for a in adapters:
+        if key and key in a["name"].lower():
+            return a["index"]
+    return -1
+
+
+def vulkan_twin(spec: str) -> str:
+    """The Vulkan entry of an AMD (ROCm) card - used when ROCm can't run it. '' if none."""
+    if parse(spec)[0] != "amd":
+        return ""
+    g = _gpu_of(spec)
+    if g is None:
+        return ""
+    import gpus
+    try:
+        for v in gpus.vulkan():
+            if getattr(g, "device_id", 0) and v.device_id == g.device_id:
+                return f"vulkan:{v.index}"
+    except Exception:
+        pass
+    return ""
 
 
 def parse(spec: str) -> tuple[str, int]:
@@ -87,13 +150,15 @@ def is_remote(spec: str) -> bool:
     return parse(spec)[0] == "amd"
 
 
-def label(spec: str) -> str:
+def label(spec: str, kind: str = "whisper") -> str:
     vendor, idx = parse(spec)
     if vendor == "cpu":
         return "CPU"
     for g in available_gpus():
         if g.vendor == vendor and g.index == idx:
-            return g.name + (" (Vulkan)" if vendor == "vulkan" else "")
+            if vendor == "vulkan":
+                return g.name + (" (DirectML)" if runs_on_directml(spec, kind) else " (Vulkan)")
+            return g.name
     return f"{vendor.upper()} GPU {idx}"
 
 
@@ -140,6 +205,9 @@ def choices(include_same: bool = False, same_label: str = "Same as speech",
     for g in available_gpus():
         spec = f"{g.vendor}:{g.index}"
         if supports(spec, kind):
-            out.append((spec, gpu_label(g)))
+            lab = gpu_label(g)
+            if runs_on_directml(spec, kind):
+                lab = lab.replace(", Vulkan)", ", DirectML)")
+            out.append((spec, lab))
     out.append(("cpu", "CPU (slow)"))
     return out
