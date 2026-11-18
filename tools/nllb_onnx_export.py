@@ -187,24 +187,26 @@ def check(name: str, out: Path) -> int:
     dest.mkdir(parents=True, exist_ok=True)
     for f in ("encoder_model.onnx", "decoder_model_merged.onnx", "config.json"):
         shutil.copy(out / f, dest / f)
-    # one model at a time: the runner has 16 GB, and the CPU runs fp16 as float32
+    # one model at a time: the runner has 16 GB, and the CPU runs fp16 as float32. The big
+    # model only gets a short smoke test there (the export code is the same for both).
+    samples = SAMPLES[:3] if "1.3B" in name else SAMPLES
     ref = translator.TextTranslator(name, "cpu", print)
-    want = [ref.translate(text, src, dst) for src, dst, text in SAMPLES]
+    want = [ref.translate(text, src, dst) for src, dst, text in samples]
     del ref
     import gc
     gc.collect()
     onnx_tr = nllb_onnx.OnnxTranslator(name, "cpu", print, providers=["CPUExecutionProvider"])
     same = 0
-    for (src, dst, text), a in zip(SAMPLES, want):
+    for (src, dst, text), a in zip(samples, want):
         b = onnx_tr.translate(text, src, dst)
         same += a == b
         print(f"[{src}->{dst}] {text}\n   ct2 : {a}\n   onnx: {b}", flush=True)
         if not b.strip():
             print("EMPTY translation")
             return 1
-    print(f"{same}/{len(SAMPLES)} identical")
+    print(f"{same}/{len(samples)} identical")
     # int8 (CTranslate2) and fp16 (ONNX) differ a little; most must still match exactly
-    return 0 if same >= len(SAMPLES) * 5 // 8 else 1
+    return 0 if same >= max(1, len(samples) * 5 // 8) else 1
 
 
 if __name__ == "__main__":

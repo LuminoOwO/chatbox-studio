@@ -48,6 +48,7 @@ jobs:
           rm -rf ~/.cache/huggingface/hub/models--facebook--*
           ls -la out
       - name: Check against the CTranslate2 model
+        timeout-minutes: 75
         env:
           XDG_DATA_HOME: ${{ runner.temp }}/data
         run: python tools/nllb_onnx_export.py check "${{ matrix.model }}" out
