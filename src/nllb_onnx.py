@@ -28,15 +28,17 @@ import paths
 from languages import NLLB
 
 RELEASE = "https://github.com/LuminoOwO/chatbox-studio/releases/download/models-nllb-onnx-1/"
-# model -> [(file, download MB)]
+# model -> [(file, size in bytes)] - the size is checked after the download
 FILES = {
-    "nllb-200-distilled-600M": [("encoder_model.onnx", 830), ("decoder_model_merged.onnx", 935),
-                                ("config.json", 0)],
-    "nllb-200-distilled-1.3B": [("encoder_model.onnx", 1150), ("decoder_model_merged.onnx", 1350),
-                                ("config.json", 0)],
+    "nllb-200-distilled-600M": [("encoder_model.onnx", 879704198),
+                                ("decoder_model_merged.onnx", 879857101),
+                                ("config.json", 248)],
+    "nllb-200-distilled-1.3B": [("encoder_model.onnx", 1635464400),
+                                ("decoder_model_merged.onnx", 1635741659),
+                                ("config.json", 248)],
 }
-# graphics memory (MB) while translating
-VRAM = {"nllb-200-distilled-600M": 1900, "nllb-200-distilled-1.3B": 3000}
+# graphics memory (MB) while translating: the fp16 weights plus working memory
+VRAM = {"nllb-200-distilled-600M": 2100, "nllb-200-distilled-1.3B": 3700}
 
 
 def onnx_dir(name: str) -> Path:
@@ -44,24 +46,27 @@ def onnx_dir(name: str) -> Path:
 
 
 def size_mb(name: str) -> int:
-    return sum(mb for _f, mb in FILES.get(name, []))
+    return round(sum(n for _f, n in FILES.get(name, [])) / 1e6)
 
 
 def is_installed(name: str) -> bool:
     d = onnx_dir(name)
-    return all((d / f).exists() for f, _mb in FILES.get(name, [("x", 0)]))
+    try:
+        return all((d / f).stat().st_size == n for f, n in FILES.get(name, [("x", -1)]))
+    except OSError:
+        return False
 
 
 def download(name: str, progress: Callable[[int], None] = lambda pct: None) -> Path:
     """Downloads the ONNX files (resumes a broken download)."""
     d = onnx_dir(name)
     d.mkdir(parents=True, exist_ok=True)
-    total = max(1, size_mb(name)) * 1_000_000
+    total = max(1, sum(n for _f, n in FILES[name]))
     done = 0
-    for fname, _mb in FILES[name]:
+    for fname, nbytes in FILES[name]:
         dest = d / fname
-        if dest.exists():
-            done += dest.stat().st_size
+        if dest.exists() and dest.stat().st_size == nbytes:
+            done += nbytes
             continue
         part = dest.with_suffix(dest.suffix + ".part")
         have = part.stat().st_size if part.exists() else 0
@@ -81,8 +86,11 @@ def download(name: str, progress: Callable[[int], None] = lambda pct: None) -> P
                     f.write(chunk)
                     got += len(chunk)
                     progress(min(99, int((done + got) * 100 / total)))
+        if part.stat().st_size != nbytes:
+            part.unlink(missing_ok=True)
+            raise RuntimeError(f"{fname} downloaded incompletely - run the setup again")
         os.replace(part, dest)
-        done += dest.stat().st_size
+        done += nbytes
     progress(100)
     return d
 

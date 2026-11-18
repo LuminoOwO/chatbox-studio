@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.33
+- **AMD graphics cards on Windows: translation on the card, nothing on the CPU anymore.**
+  Before, every Radeon was set up for AMD ROCm. ROCm's Windows build only runs on a few
+  chips (RX 6800 / 6900, RX 7000, RX 9000), and the app treated cards it didn't recognise as
+  supported - so on most Radeons ROCm found no card and speech recognition *and* the
+  translator fell back to the CPU.
+  - The translator now runs on any Windows graphics card with **DirectML** (ONNX Runtime,
+    part of Windows - no extra driver). It sits next to speech recognition on Vulkan, on the
+    same card. The setup downloads DirectML (~25 MB) and the translator in DirectML form
+    (NLLB 600M ~1.8 GB, 1.3B ~3.3 GB).
+  - AMD cards on Windows now use Vulkan (speech) + DirectML (translator) by default; ROCm
+    stays in *Custom…* for the cards it supports.
+  - **Existing installs move over by themselves:** run the setup once (the update does it):
+    a Radeon that was on ROCm without it working switches to Vulkan + DirectML.
+  - If ROCm isn't installed, a model set to an AMD card runs through Vulkan / DirectML
+    instead of the CPU, and says so in the log.
+  - Radeon cards are recognised from a complete list (all RX 400 - RX 9000, Vega, APUs)
+    instead of nine models.
+
 ## 1.32
 - **Updates from inside the app.** When a new version is out, an **⬆ Update to …** button
   appears at the top of the window (checked at most once a day, or right away with

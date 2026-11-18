@@ -107,8 +107,8 @@ works as before.
 | Your graphics | Engine | Notes |
 |---|---|---|
 | NVIDIA GeForce / RTX | CUDA (CTranslate2) | Fastest for everything. Pascal (GTX 10 series) needs a driver branch that still supports it. |
-| AMD Radeon RX 6800 and newer, RX 7000, RX 9000 | ROCm (CTranslate2) | Speech, translator and smart AI on the card. Windows: AMD Adrenalin 26.2.2 or newer. Linux: AMD's ROCm 7.2 libraries (the setup helps on Debian / Ubuntu). |
-| Any AMD Radeon, AMD APUs (Radeon 680M / 780M / 890M, Steam Deck-class), Intel Arc and Intel Iris Xe / UHD graphics | **Vulkan** (whisper.cpp) | Speech recognition on the chip with your normal graphics driver - nothing else to install. The translator then runs on the CPU. On Linux this is the default for AMD, since it works on every distribution. |
+| Any AMD Radeon, AMD APUs (Radeon 680M / 780M / 890M, Steam Deck-class), Intel Arc and Intel Iris Xe / UHD graphics | **Vulkan** (whisper.cpp) + on Windows **DirectML** (ONNX Runtime) | Speech recognition on the chip with your normal graphics driver - nothing else to install. On Windows the translator runs on the same chip with DirectML; on Linux it runs on the CPU. The default for AMD on Windows and Linux. |
+| AMD Radeon RX 6800 / 6900, RX 7000, RX 9000 (and Radeon 890M / 8060S) | ROCm (CTranslate2), optional | Speech, translator and smart AI on the card (pick it in *Custom…*). Windows: AMD Adrenalin 26.2.2 or newer, and only these chips - AMD's ROCm build for Windows doesn't run on others (RX 6600 / 6700, RX 5000, RX 500 / Vega). Linux: AMD's ROCm 7.2 libraries (the setup helps on Debian / Ubuntu). |
 | No usable graphics | CPU | Works, with smaller models. |
 
 - **Integrated graphics / APUs** share the system memory; the setup counts what they can
