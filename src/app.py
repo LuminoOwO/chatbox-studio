@@ -166,6 +166,7 @@ class Window(QMainWindow):
         self.bridge = Bridge()
         from update_ui import UpdateChecker
         self.updates = UpdateChecker(self)
+        self.subs = None                  # the subtitle window, while it's open
         self.bridge.log.connect(self.add_log)
         self.bridge.result.connect(self.add_result)
         self.bridge.translator.connect(self.on_translator_state)
@@ -187,6 +188,8 @@ class Window(QMainWindow):
         if start_engine:
             QTimer.singleShot(0, self.start_engine)
             QTimer.singleShot(5000, self.updates.maybe_check)
+        if (self.s.extra.get("subtitles") or {}).get("open"):
+            QTimer.singleShot(0, lambda: self.subs_btn.setChecked(True))
             if not self.s.extra.get("onboarded"):
                 QTimer.singleShot(700, self.show_quick_start)
 
@@ -233,6 +236,12 @@ class Window(QMainWindow):
         self.update_btn = QPushButton("⬆ Update", objectName="primary", visible=False)
         self.update_btn.clicked.connect(lambda: self.updates.open())
         head.addWidget(self.update_btn)
+        self.subs_btn = QPushButton("🖵 Subtitles", checkable=True)
+        self.subs_btn.setToolTip("A window that shows what you say as big text on a black "
+                                 "background - for OBS (Window Capture) or a second screen. "
+                                 "Right-click it for its settings (Ctrl+T)")
+        self.subs_btn.toggled.connect(self.on_subtitles_toggled)
+        head.addWidget(self.subs_btn)
         self.help_btn = QPushButton("❔ Help")
         self.help_btn.setToolTip("Quick start, a tour of the window, keyboard shortcuts (F1)")
         hm = QMenu(self.help_btn)
@@ -535,6 +544,7 @@ class Window(QMainWindow):
         for keys, what in (("Ctrl+P", "Pause / resume listening"),
                            ("Ctrl+H", "Hide extras (privacy: only speech in the chatbox)"),
                            ("Ctrl+L", "Clear the chatbox in VRChat"),
+                           ("Ctrl+T", "Subtitle window (for OBS / a second screen)"),
                            ("Ctrl+1 / 2 / 3", "Speech & translation / Chatbox / Earshot tab"),
                            ("Ctrl+,", "Settings"), ("F1", "Help"),
                            ("Tab / Shift+Tab", "Move between controls")):
@@ -1128,7 +1138,8 @@ class Window(QMainWindow):
             QShortcut(QKeySequence(keys), self, activated=fn)
         sc("Ctrl+P", self.listen_btn.toggle)
         sc("Ctrl+H", lambda: self.quick._hide_all(not self.s.chatbox.get("hide_extras")))
-        sc("Ctrl+L", lambda: self.engine and self.engine.chatbox.clear())
+        sc("Ctrl+L", self.clear_chatbox)
+        sc("Ctrl+T", self.subs_btn.toggle)
         sc("Ctrl+1", lambda: self.tabs.setCurrentIndex(0))
         sc("Ctrl+2", lambda: self.tabs.setCurrentIndex(1))
         sc("Ctrl+3", lambda: self.tabs.setCurrentIndex(2))
@@ -1152,6 +1163,7 @@ class Window(QMainWindow):
             self.add_log(f"Typed message not sent ({blocked}): {text!r}")
         else:
             self.add_row("TYPED", [("", line, "", False) for line in sent.split("\n")])
+            self._subtitle_typed(text, sent)
         self.manual.clear()
 
     def add_result(self, r: Result):
@@ -1161,6 +1173,7 @@ class Window(QMainWindow):
         if r.dropped:
             self.add_log(f"Blocked by filter ({r.reason}): {r.original or r.text!r}")
             return
+        self._subtitle_result(r)
         badge = r.language.upper()
         if r.lang_prob < 0.999:
             badge += f"  ·  {r.lang_prob:.0%} sure"
@@ -1352,7 +1365,50 @@ class Window(QMainWindow):
         else:
             cl.setVisible(True)
 
+    # ------------------------------------------------------------------ subtitles
+    def on_subtitles_toggled(self, on: bool):
+        import subtitles
+        cfg = subtitles.config(self.s.extra)
+        cfg["open"] = bool(on)
+        self.save()
+        if on:
+            if self.subs is None:
+                self.subs = subtitles.SubtitleWindow(cfg)
+                self.subs.closed.connect(lambda: self.subs_btn.setChecked(False))
+                self.subs.changed.connect(self.save)
+            self.subs.show()
+            self.subs.raise_()
+        elif self.subs is not None:
+            w, self.subs = self.subs, None
+            w.closed.disconnect()
+            w.close()
+            w.deleteLater()
+
+    def _subtitle_result(self, r: Result):
+        if self.subs is None:
+            return
+        outs = [o for o in r.outputs if not o.blocked]
+        same = next((o.text for o in outs if not o.translated), "")
+        original = same or r.original or ""
+        if original and not same and self.engine:
+            f = self.engine.filters.apply(original)      # the filters apply here too
+            original = "" if f.blocked else f.text
+        self.subs.add(original, [o.text for o in outs if o.translated])
+
+    def _subtitle_typed(self, text: str, sent: str):
+        if self.subs is not None and self.subs.cfg.get("typed", True) and sent:
+            self.subs.add(text, [sent] if sent != text else [])
+
+    def clear_chatbox(self):
+        if self.engine:
+            self.engine.chatbox.clear()
+        if self.subs is not None:
+            self.subs.clear()
+
     def closeEvent(self, e):
+        if self.subs is not None:
+            self.subs.closed.disconnect()
+            self.subs.close()
         save_settings(self.s)
         if self.engine:
             self.engine.stop_audio()

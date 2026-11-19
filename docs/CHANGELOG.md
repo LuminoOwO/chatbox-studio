@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.34
+- **Subtitle window** (*🖵 Subtitles* at the top, Ctrl+T): what you say as big outlined
+  text on a black background, in a window of its own - for OBS (*Window Capture*, blend
+  mode *Screen*, or a chroma key on the green background), a second screen or a stream
+  overlay.
+  - Shows the translation, what you said, or both; the same filtered text as the chatbox;
+    typed messages too (can be switched off).
+  - Right-click for settings: font, size, colours, outline, background, position, how many
+    sentences stay, when it empties, always on top. Double-click for full screen.
+  - Remembers its size, place and whether it was open. Ctrl+L clears it with the chatbox.
+
 ## 1.33
 - **AMD graphics cards on Windows: translation on the card, nothing on the CPU anymore.**
   Before, every Radeon was set up for AMD ROCm. ROCm's Windows build only runs on a few

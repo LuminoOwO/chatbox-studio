@@ -286,6 +286,20 @@ VRChat to a virtual cable and pick that cable.
 Everything stays on your PC, nothing is saved unless you press *Save…*, and what other players
 say is never sent to the chatbox.
 
+## 🖵 Subtitles for OBS and second screens
+
+**🖵 Subtitles** at the top (Ctrl+T) opens a window that shows what you say - the
+translation, what you said, or both - as big outlined text on a black background. It shows
+the same filtered text as the chatbox and empties itself after a few seconds of quiet.
+
+- **OBS:** add a *Window Capture* source and pick **Chatbox Studio - Subtitles**. On black,
+  set the source's blend mode to *Screen* or *Add*; or switch the window to the green
+  background and add a *Chroma Key* filter.
+- **Right-click the window** for its settings: font and size, colours, outline, background
+  (black, green, blue, magenta or any colour), position, how many sentences stay, when it
+  empties, typed messages, always on top. **Double-click:** full screen.
+- It remembers its size, place and whether it was open.
+
 ## Appearance and keyboard
 
 *⚙ Settings › General*: **Dark**, **Light**, **High contrast**, **Catppuccin** (Mocha,
@@ -296,7 +310,8 @@ Pine**, plus a text size from Small to Largest. Every control can be reached wit
 |---|---|
 | Ctrl+P | Pause / resume listening |
 | Ctrl+H | Hide extras (privacy) |
-| Ctrl+L | Clear the chatbox in VRChat |
+| Ctrl+L | Clear the chatbox in VRChat (and the subtitle window) |
+| Ctrl+T | Subtitle window |
 | Ctrl+1 / 2 / 3 | Speech & translation / Chatbox / Earshot tab |
 | Ctrl+, | Settings |
 | F1 | Help |
