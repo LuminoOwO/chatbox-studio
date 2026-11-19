@@ -307,7 +307,10 @@ or a stream overlay:
   lines on the right. No names - Earshot can't tell people apart - just an icon or
   "Room" / "You" if you want, the language and the time.
 
-**Right-click a window** for its settings - changes show right away:
+**Right-click a window** for quick switches - ⏸ *Pause* (takes no new lines - also in
+the *🖵 Subtitles* menu), what to show, and each feature on or off (typed messages, language,
+time, your own lines, box / bubbles, outline, shadow, capitals, fading) - and for its
+settings; changes show right away:
 
 - *Look*: ready-made styles - Outlined, Caption box (green screen), Shadow, Chroma green,
   Yellow (classic TV).

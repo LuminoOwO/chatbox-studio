@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.37
+- **Earshot chat: no more doubled lines.** Your own sentences showed the chatbox message as
+  their "translation" - with the chatbox format (`[DE→EN] …`) and the same sentence again.
+  Now the second line is the real translation, and only when there is one. Lines that only
+  differ in case or punctuation count as the same (both windows).
+- Subtitles: typed messages show their real translation too, not the chatbox message.
+- **Quick switches** in both windows' right-click menu: what to show, and typed messages,
+  language, time, your own lines, which side, box / bubbles, outline, shadow, capitals and
+  fading on or off - without opening the settings.
+- **⏸ Pause** for each window (right-click, or the *🖵 Subtitles* menu): takes no new lines
+  until you switch it off - e.g. for a private moment on stream.
+
 ## 1.36
 - **Earshot can listen to one program** - e.g. **Discord** or **Vesktop**: *🎧 Earshot ›
   Sound › One program…*. Only that program's sound is transcribed and translated, without

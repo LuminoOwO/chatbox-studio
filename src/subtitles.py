@@ -51,6 +51,7 @@ STYLE = {                              # both windows
     "max_width": 94,                   # % of the window
     "line_spacing": 108,               # %
     "fade": True,                      # fade in / out
+    "paused": False,                   # take no new lines
     "on_top": False,
     "geometry": None,
 }
@@ -117,6 +118,13 @@ def wrap(text: str, fm: QFontMetricsF, width: float) -> list[str]:
     return [x for x in out if x.strip()]
 
 
+def same_text(a: str, b: str) -> bool:
+    """Equal apart from case, spaces and punctuation (then a second line adds nothing)."""
+    def key(t):
+        return "".join(c for c in (t or "").casefold() if c.isalnum())
+    return key(a) == key(b)
+
+
 def _alpha(color: str, opacity_pct) -> QColor:
     c = QColor(color)
     c.setAlpha(int(255 * max(0, min(100, int(opacity_pct))) / 100))
@@ -159,6 +167,11 @@ class OverlayWindow(QWidget):
         pass
 
     def fields(self) -> list:
+        return []
+
+    def quick(self) -> list:
+        """Switches in the right-click menu: ("check", label, key) or
+        ("choice", label, key, [(text, value)])."""
         return []
 
     # ---- helpers
@@ -221,6 +234,32 @@ class OverlayWindow(QWidget):
     # ---- window
     def contextMenuEvent(self, e):
         m = QMenu(self)
+        pause = m.addAction("⏸  Pause - take no new lines")
+        pause.setCheckable(True)
+        pause.setChecked(bool(self.cfg.get("paused")))
+        pause.toggled.connect(lambda on: self.set_opt("paused", on))
+        m.addSeparator()
+        for item in self.quick():
+            if item[0] == "check":
+                _k, label, key = item
+                a = m.addAction(label)
+                a.setCheckable(True)
+                if key == "outline":
+                    a.setChecked(float(self.cfg.get("outline") or 0) > 0)
+                    a.toggled.connect(self._toggle_outline)
+                else:
+                    a.setChecked(bool(self.cfg.get(key)))
+                    a.toggled.connect(lambda on, key=key: self.set_opt(key, on))
+            else:
+                _k, label, key, options = item
+                sub = m.addMenu(label)
+                for text, val in options:
+                    a = sub.addAction(text)
+                    a.setCheckable(True)
+                    a.setChecked(self.cfg.get(key) == val)
+                    a.triggered.connect(lambda _c=False, key=key, val=val:
+                                        self.set_opt(key, val))
+        m.addSeparator()
         m.addAction("Settings…", self.open_settings)
         presets = m.addMenu("Look")
         for name in PRESETS:
@@ -239,6 +278,13 @@ class OverlayWindow(QWidget):
         m.addSeparator()
         m.addAction("Close", self.close)
         m.exec(e.globalPos())
+
+    def _toggle_outline(self, on: bool):
+        if on:
+            self.set_opt("outline", int(self.cfg.get("outline_was") or 4))
+        else:
+            self.cfg["outline_was"] = int(self.cfg.get("outline") or 4)
+            self.set_opt("outline", 0)
 
     def use_preset(self, name: str):
         for k, v in PRESETS[name].items():
@@ -294,6 +340,8 @@ class SubtitleWindow(OverlayWindow):
 
     def add(self, original: str, translations: list, src: str = "", dsts: list | None = None):
         """One sentence: what was said and its translations (empty when not translated)."""
+        if self.cfg.get("paused"):
+            return
         show = self.cfg["show"]
         dsts = list(dsts or [])
         parts = []
@@ -301,10 +349,13 @@ class SubtitleWindow(OverlayWindow):
             parts.append(("orig" if show == "both" else "main", original.strip(), src))
         if show in ("translation", "both"):
             trs = [(t.strip(), dsts[i] if i < len(dsts) else "")
-                   for i, t in enumerate(translations) if t.strip()]
+                   for i, t in enumerate(translations) if t.strip()
+                   and not (show == "both" and same_text(t, original))]
             if not trs and show == "translation" and original.strip():
                 trs = [(original.strip(), src)]        # nothing to translate
             parts += [("main", t, lang) for t, lang in trs]
+            if show == "both" and not trs:          # nothing new to show: one big line
+                parts = [("main",) + p[1:] for p in parts]
         if not parts:
             return
         self.entries.append((time.monotonic(), parts))
@@ -390,6 +441,18 @@ class SubtitleWindow(OverlayWindow):
             y += h + gap
         p.setOpacity(1.0)
 
+    def quick(self):
+        return [
+            ("choice", "Show", "show", SHOW),
+            ("check", "Messages you type", "typed"),
+            ("check", "Language in front", "lang_tag"),
+            ("check", "Box behind the text", "box"),
+            ("check", "Outline", "outline"),
+            ("check", "Drop shadow", "shadow"),
+            ("check", "CAPITALS", "uppercase"),
+            ("check", "Fade in and out", "fade"),
+        ]
+
     def fields(self):
         return [
             ("Show", "combo", "show", SHOW),
@@ -415,6 +478,8 @@ class ChatWindow(OverlayWindow):
         return 620, 760
 
     def add(self, ln):
+        if self.cfg.get("paused"):
+            return
         if ln.who != "them" and not self.cfg.get("mine", True):
             return
         self.msgs.append((time.monotonic(), ln))
@@ -453,8 +518,8 @@ class ChatWindow(OverlayWindow):
         """[(kind, text)] for a message: main text + optional small second line."""
         show = self.cfg["show"]
         said, tr = ln.text.strip(), (ln.translation or "").strip()
-        if ln.who != "them":                       # you: what you said, what was sent
-            tr = tr if tr and tr != said else ""
+        if same_text(said, tr):                    # not translated: one line is enough
+            tr = ""
         if show == "original" or not tr:
             return [("main", said)]
         if show == "translation":
@@ -529,6 +594,21 @@ class ChatWindow(OverlayWindow):
                 ly += lh
             y -= gap
         p.setOpacity(1.0)
+
+    def quick(self):
+        return [
+            ("choice", "Show", "show", [("Translation", "translation"),
+                                        ("What was said", "original"), ("Both", "both")]),
+            ("choice", "Mark who's talking", "labels", [("Icons (🎧 / 🗣)", "icons"),
+                                                        ("Words (Room / You)", "words"),
+                                                        ("Nothing", "none")]),
+            ("check", "Your own sentences", "mine"),
+            ("check", "Yours on the right", "sides"),
+            ("check", "Language", "lang_tag"),
+            ("check", "Time", "timestamps"),
+            ("check", "Bubbles", "box"),
+            ("check", "Fade in and out", "fade"),
+        ]
 
     def fields(self):
         return [

@@ -1199,7 +1199,10 @@ class Engine:
                     r.chat = self._finish(r.language, r.original, r.outputs)
                     if r.chat.strip():
                         self.chatbox.set_speech(r.chat)
-                        self.earshot.note_own(r.language, r.original or r.text, r.chat)
+                        # the translations themselves - not the chatbox message, which has
+                        # the chatbox template ("[DE→EN] …") and the sentence again
+                        trs = [o.text for o in r.outputs if o.translated and not o.blocked]
+                        self.earshot.note_own(r.language, r.original or r.text, "\n".join(trs))
                     else:
                         r.dropped, r.filtered = True, True
                         r.reason = "; ".join(o.blocked for o in r.outputs if o.blocked)
@@ -1219,6 +1222,7 @@ class Engine:
         if not text:
             return "", ""
         filters = self.filters if self.s.filter_typed else FilterSet(enabled=False)
+        self.last_typed = (text, [])          # (what you typed, its translations) - subtitles
         if self.s.translate_typed:
             src = self.typed_language()
             targets = [d for s_, d in active_routes(self.s) if s_ == src] or [src]
@@ -1226,10 +1230,12 @@ class Engine:
             chat = self._finish(src, text, outs, filters)
             if not chat.strip():
                 return text, "; ".join(o.blocked for o in outs if o.blocked) or "blocked"
+            self.last_typed = (text, [o.text for o in outs if o.translated and not o.blocked])
         else:
             f = filters.apply(text)
             if f.blocked:
                 return text, f.reason
             chat = f.text
+            self.last_typed = (chat, [])
         self.chatbox.set_speech(chat)
         return chat, ""

@@ -250,6 +250,16 @@ class Window(QMainWindow):
         self.chat_act = sm.addAction("Earshot chat - what you hear  (Ctrl+E)")
         self.chat_act.setCheckable(True)
         self.chat_act.toggled.connect(self.on_earshot_chat_toggled)
+        sm.addSeparator()
+        self.pause_acts = {}
+        for key, label in (("subtitles", "⏸  Pause the subtitles"),
+                           ("earshot_chat", "⏸  Pause the Earshot chat")):
+            act = sm.addAction(label)
+            act.setCheckable(True)
+            act.setToolTip("Takes no new lines until you switch it off again")
+            act.toggled.connect(lambda on, key=key: self._pause_overlay(key, on))
+            self.pause_acts[key] = act
+        sm.aboutToShow.connect(self._sync_pause_acts)
         self.subs_btn.setMenu(sm)
         head.addWidget(self.subs_btn)
         self.help_btn = QPushButton("❔ Help")
@@ -1399,6 +1409,21 @@ class Window(QMainWindow):
             win.close()
             win.deleteLater()
 
+    def _pause_overlay(self, key: str, on: bool):
+        import subtitles
+        cfg = subtitles.config(self.s.extra, key)
+        if bool(cfg.get("paused")) != bool(on):
+            cfg["paused"] = bool(on)
+            self.save()
+            self.add_log(("Paused" if on else "Resumed") + " the "
+                         + ("subtitles." if key == "subtitles" else "Earshot chat."))
+
+    def _sync_pause_acts(self):
+        for key, act in self.pause_acts.items():
+            act.blockSignals(True)
+            act.setChecked(bool((self.s.extra.get(key) or {}).get("paused")))
+            act.blockSignals(False)
+
     def on_subtitles_toggled(self, on: bool):
         self._overlay(on, "subs", "subtitles", "SubtitleWindow", self.subs_act)
 
@@ -1422,7 +1447,8 @@ class Window(QMainWindow):
 
     def _subtitle_typed(self, text: str, sent: str):
         if self.subs is not None and self.subs.cfg.get("typed", True) and sent:
-            self.subs.add(text, [sent] if sent != text else [])
+            said, trs = getattr(self.engine, "last_typed", None) or (text, [])
+            self.subs.add(said, trs)
 
     def clear_chatbox(self):
         if self.engine:
