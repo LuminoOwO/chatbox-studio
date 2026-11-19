@@ -271,7 +271,7 @@ you say - and keeps a short memory of the conversation. Turn it on in the **🎧
   you're translated into whatever the people around you speak;
 - **ignores speaker echo** - sentences that are just what the game played aren't sent;
 - **shows what others say**, translated into your language, in the Earshot tab (never in your
-  chatbox);
+  chatbox) - **A− / A+** (or Ctrl + mouse wheel) change the text size there;
 - can run **its own listening model** on another device (e.g. an iGPU), so it hears the game
   while you talk.
 
@@ -320,6 +320,9 @@ settings; changes show right away:
   behind the text, with their colour and opacity; fade in and out.
 - Subtitles: position, how many sentences stay, when it empties, the language in front.
   Chat: how many messages, when they vanish, your own lines or not, which side.
+- Text size right on the window: **Ctrl + mouse wheel**, **Ctrl + / −**, or the right-click
+  menu. The chat's padding, space between messages and distance to the window edge are
+  settings too.
 - Always on top; **double-click** for full screen.
 
 **In OBS:** add a *Window Capture* source and pick **Chatbox Studio - Subtitles** or

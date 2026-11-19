@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.38
+- **Earshot: more room and adjustable text size.**
+  - Earshot tab: **A− / A+** next to the conversation (or Ctrl + mouse wheel) change its
+    text size; more space around and between the messages. Your own lines show their
+    translation as "→ …" like everyone else's.
+  - Earshot chat window: more padding in the bubbles, more space between messages and to
+    the window edge by default - all three are settings now (*Padding in bubbles*, *Space
+    between messages*, *Space to the window edge*).
+- Both windows: text size right on the window - **Ctrl + mouse wheel**, **Ctrl + / −**, or
+  *Text bigger / smaller* in the right-click menu.
+
 ## 1.37
 - **Earshot chat: no more doubled lines.** Your own sentences showed the chatbox message as
   their "translation" - with the chatbox format (`[DE→EN] …`) and the same sentence again.

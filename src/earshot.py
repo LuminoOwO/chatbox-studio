@@ -50,6 +50,7 @@ DEFAULTS = {
     "whisper_context": False,       # experimental: give Whisper your recent sentences
     "echo_guard": True,
     "show_heard": True,
+    "view_size": 15,                # text size (px) of the conversation in the Earshot tab
     "show_in": "en",                # translate what others say into this language
     "context_minutes": 3.0,
     "room_fallback": "en",          # room language until one is known

@@ -60,7 +60,10 @@ SUB_DEFAULTS = dict(STYLE, show="translation", typed=True, align="bottom", sente
 CHAT_DEFAULTS = dict(STYLE, size=30, outline=0, box=True, box_opacity=85, align_h="left",
                      max_width=80, show="both", mine=True, labels="icons", timestamps=False,
                      lang_tag=True, sides=True, box_mine="#1f6f43", box_color="#262b33",
-                     messages=8, clear_after=0.0)
+                     messages=8, clear_after=0.0,
+                     padding=70,          # inside a bubble, % of the text size
+                     spacing=60,          # between messages, % of the text size
+                     margin=28)           # window edge, px
 
 PRESETS = {
     "Outlined": dict(outline=4, shadow=False, box=False, background="#000000",
@@ -231,6 +234,24 @@ class OverlayWindow(QWidget):
     def animating(self, on: bool):
         self._timer.setInterval(33 if on else 500)
 
+    # ---- text size right on the window: Ctrl + wheel, Ctrl + / -, the menu
+    def zoom(self, step: int):
+        self.set_opt("size", max(12, min(200, int(self.cfg["size"]) + step * 2)))
+
+    def wheelEvent(self, e):
+        if e.modifiers() & Qt.ControlModifier:
+            self.zoom(1 if e.angleDelta().y() > 0 else -1)
+        else:
+            super().wheelEvent(e)
+
+    def keyPressEvent(self, e):
+        if e.modifiers() & Qt.ControlModifier and e.key() in (Qt.Key_Plus, Qt.Key_Equal):
+            self.zoom(1)
+        elif e.modifiers() & Qt.ControlModifier and e.key() == Qt.Key_Minus:
+            self.zoom(-1)
+        else:
+            super().keyPressEvent(e)
+
     # ---- window
     def contextMenuEvent(self, e):
         m = QMenu(self)
@@ -238,6 +259,10 @@ class OverlayWindow(QWidget):
         pause.setCheckable(True)
         pause.setChecked(bool(self.cfg.get("paused")))
         pause.toggled.connect(lambda on: self.set_opt("paused", on))
+        m.addSeparator()
+        bigger = m.addAction(f"Text bigger  (Ctrl +)   - now {int(self.cfg['size'])} px")
+        bigger.triggered.connect(lambda: self.zoom(1))
+        m.addAction("Text smaller  (Ctrl −)", lambda: self.zoom(-1))
         m.addSeparator()
         for item in self.quick():
             if item[0] == "check":
@@ -531,17 +556,17 @@ class ChatWindow(OverlayWindow):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.rect(), QColor(self.cfg["background"]))
-        margin = max(10.0, self.width() * 0.025)
+        margin = float(self.cfg.get("margin", 28))
         maxw = (self.width() - 2 * margin) * max(30, min(100, int(self.cfg["max_width"]))) / 100
         box = bool(self.cfg.get("box"))
-        pad = int(self.cfg["size"]) * (0.45 if box else 0.0)
+        pad = int(self.cfg["size"]) * (int(self.cfg.get("padding", 70)) / 100 if box else 0.0)
         now = time.monotonic()
         life = float(self.cfg.get("clear_after") or 0)
         small = self.font_for(0.55)
         small_fm = QFontMetricsF(small)
         limit = max(1, int(self.cfg.get("messages", 8)))
         y = self.height() - margin
-        gap = int(self.cfg["size"]) * 0.35
+        gap = int(self.cfg["size"]) * int(self.cfg.get("spacing", 60)) / 100
         for born, ln in list(self.msgs)[-limit:][::-1]:      # newest at the bottom
             mine = ln.who != "them"
             rows = []
@@ -584,7 +609,8 @@ class ChatWindow(OverlayWindow):
                 p.setPen(Qt.NoPen)
                 col = self.cfg["box_mine"] if mine else self.cfg["box_color"]
                 p.setBrush(_alpha(col, self.cfg["box_opacity"]))
-                p.drawRoundedRect(QRectF(bx, y, width + 2 * pad, h), pad * 0.8, pad * 0.8)
+                r = min(pad * 0.8, int(self.cfg["size"]) * 0.5)
+                p.drawRoundedRect(QRectF(bx, y, width + 2 * pad, h), r, r)
             ly = y + pad
             for row in rows:
                 font, fm, color, line, lh = row
@@ -623,6 +649,9 @@ class ChatWindow(OverlayWindow):
             ("", "check", "lang_tag", "Show the language"),
             ("", "check", "timestamps", "Show the time"),
             ("Bubble for yours", "color", "box_mine", None),
+            ("Padding in bubbles", "spin", "padding", (0, 200, " % of the text")),
+            ("Space between messages", "spin", "spacing", (0, 300, " % of the text")),
+            ("Space to the window edge", "spin", "margin", (0, 200, " px")),
             ("Messages shown", "spin", "messages", (1, 30, "")),
             ("Messages vanish after", "dspin", "clear_after", (0, 3600, " s", "never")),
         ]

@@ -241,6 +241,12 @@ class EarshotTab(QWidget):
         head.addStretch()
         self.count = QLabel(objectName="hint")
         head.addWidget(self.count)
+        for text, step, tip in (("A−", -1, "Smaller text (Ctrl + mouse wheel)"),
+                                ("A+", +1, "Bigger text (Ctrl + mouse wheel)")):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _c=False, st=step: self._zoom(st))
+            head.addWidget(b)
         save = QPushButton("Save…")
         save.setToolTip("Save this conversation to a text file")
         save.clicked.connect(self._save)
@@ -251,6 +257,8 @@ class EarshotTab(QWidget):
         head.addWidget(clear)
         rl.addLayout(head)
         self.view = QTextBrowser()
+        self.view.document().setDocumentMargin(14)
+        self.view.viewport().installEventFilter(self)
         self.view.setPlaceholderText("Turn Earshot on. What people around you say shows up here, "
                                      "with your own sentences in between.")
         rl.addWidget(self.view, 1)
@@ -392,27 +400,56 @@ class EarshotTab(QWidget):
         self.room.setText(f"{languages.name(code)}  ({n} lines)" if code
                           else "— not known yet")
 
-    def add_line(self, ln):
-        self._lines.append(ln)
-        del self._lines[:-300]
+    # ---- the conversation view
+    def _size(self) -> int:
+        return max(10, min(40, int(self.cfg.get("view_size") or 15)))
+
+    def _line_html(self, ln) -> str:
+        from subtitles import same_text
+        px = self._size()
+        small = max(9, round(px * 0.78))
         stamp = time.strftime("%H:%M:%S", time.localtime(ln.t))
         lang = languages.name(ln.lang)
         if ln.who == "them":
             who = f'<span style="color:#4c9cff; font-weight:600">🎧 Someone · {lang}</span>'
-            body = html.escape(ln.text)
-            if ln.translation:
-                body += (f'<br><span style="color:#9aa2ad">→ {html.escape(ln.translation)}'
-                         f'</span>')
         else:
             who = f'<span style="color:#7ee787; font-weight:600">🗣 You · {lang}</span>'
-            body = html.escape(ln.text)
-            if ln.translation and ln.translation.strip() != ln.text.strip():
-                body += (f'<br><span style="color:#9aa2ad">sent: '
-                         f'{html.escape(ln.translation)}</span>')
-        self.view.append(f'<p><span style="color:#8a929d; font-size:11px">{stamp}</span> '
-                         f'{who}<br>{body}</p>')
+        body = html.escape(ln.text)
+        if ln.translation and not same_text(ln.translation, ln.text):
+            body += (f'<br><span style="color:#9aa2ad">→ {html.escape(ln.translation)}'
+                     f'</span>')
+        return (f'<p style="margin-top:0; margin-bottom:{round(px * 0.9)}px; '
+                f'line-height:135%; font-size:{px}px">'
+                f'<span style="color:#8a929d; font-size:{small}px">{stamp}</span>&nbsp; '
+                f'<span style="font-size:{small}px">{who}</span><br>{body}</p>')
+
+    def _render(self):
         sb = self.view.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        at_end = sb.value() >= sb.maximum() - 4
+        self.view.setHtml("".join(self._line_html(ln) for ln in self._lines))
+        if at_end:
+            sb.setValue(sb.maximum())
+
+    def _zoom(self, step: int):
+        self._set("view_size", max(10, min(40, self._size() + step * 2)))
+        self._render()
+
+    def eventFilter(self, obj, ev):
+        from PySide6.QtCore import QEvent, Qt as _Qt
+        if obj is self.view.viewport() and ev.type() == QEvent.Wheel \
+                and ev.modifiers() & _Qt.ControlModifier:
+            self._zoom(1 if ev.angleDelta().y() > 0 else -1)
+            return True
+        return super().eventFilter(obj, ev)
+
+    def add_line(self, ln):
+        self._lines.append(ln)
+        del self._lines[:-300]
+        sb = self.view.verticalScrollBar()
+        at_end = sb.value() >= sb.maximum() - 4
+        self.view.append(self._line_html(ln))
+        if at_end:
+            sb.setValue(sb.maximum())
         them = sum(1 for x in self._lines if x.who == "them")
         self.count.setText(f"{them} heard")
         if self.engine is not None:
