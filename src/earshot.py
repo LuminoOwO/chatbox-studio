@@ -44,8 +44,9 @@ IS_WINDOWS = os.name == "nt"
 
 DEFAULTS = {
     "enabled": False,
-    "source": "vrchat" if not IS_WINDOWS else "output",   # vrchat | output | device
+    "source": "vrchat" if not IS_WINDOWS else "output",   # vrchat | output | app | device
     "device": None,                 # input device name for source == "device"
+    "app": "",                      # program for source == "app", e.g. "Discord"
     "whisper_context": False,       # experimental: give Whisper your recent sentences
     "echo_guard": True,
     "show_heard": True,
@@ -228,6 +229,8 @@ class GameAudio:
             try:
                 if src == "device":
                     self._run_device(stop)
+                elif src == "app":
+                    self._run_app(stop)
                 elif IS_WINDOWS:
                     self._run_loopback_windows(stop)
                 elif src == "vrchat":
@@ -250,6 +253,37 @@ class GameAudio:
                     self._last_err = msg
                     self.log(f"Earshot: game audio failed ({msg}). Retrying every few seconds.")
             stop.wait(3)
+
+    def _run_app(self, stop: threading.Event):
+        """One program's own sound (app_audio.py)."""
+        import app_audio as AA
+        name = (self.cfg.get("app") or "").strip()
+        if not name:
+            self.on_state("Pick a program to listen to", False)
+            stop.wait(5)
+            return
+        if IS_WINDOWS:
+            if not AA.windows_supported():
+                raise RuntimeError("listening to one program needs Windows 11 - use a "
+                                   "virtual cable as an input device instead")
+            pid = AA.find_process(name)
+            if pid is None:
+                self.on_state(f"Waiting for {name}… (it isn't running)", False)
+                stop.wait(5)
+                return
+            self.on_state(f"Hearing {name} only", True)
+            AA.ProcessLoopback(pid).run(self.on_chunk, stop)
+            return
+        stream = AA.find_stream(name)
+        if stream is None:
+            self.on_state(f"Waiting for sound from {name}… (it plays nothing right now - "
+                          "Discord, for example, only while you're in a call)", False)
+            stop.wait(5)
+            return
+        self.on_state(f"Hearing {stream['app']} only", True)
+        self._run_proc(["pw-record", "--target", str(stream["serial"] or stream["id"]),
+                        "--rate", str(SAMPLE_RATE), "--channels", "1",
+                        "--format", "f32", "-"], stop)
 
     def _run_proc(self, cmd: list[str], stop: threading.Event):
         exe = _which(cmd[0])
@@ -401,8 +435,8 @@ class Earshot:
         """Call after the Earshot settings changed."""
         self.cfg = settings_of(self.e.s)
         if self.active:
-            if self.audio is None or self.audio.cfg.get("source") != self.cfg.get("source") \
-                    or self.audio.cfg.get("device") != self.cfg.get("device"):
+            if self.audio is None or any(self.audio.cfg.get(k) != self.cfg.get(k)
+                                         for k in ("source", "device", "app")):
                 if self.audio is not None:
                     self.audio.stop()
                 self.audio = GameAudio(dict(self.cfg), self._on_chunk, self._set_state, self.log)

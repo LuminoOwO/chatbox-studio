@@ -279,9 +279,17 @@ Its conversation features - hinting Whisper with your recent sentences and *Smar
 translation* with a local AI model (Qwen2.5 3B / 7B) - are **off by default**: in practice
 they often made results worse. You can still switch them on in the Earshot tab.
 
-**What it listens to:** Linux: VRChat only (PipeWire), everything you hear, or any input
-device. Windows: everything you hear (loopback) or an input device; for VRChat only, route
-VRChat to a virtual cable and pick that cable.
+**What it listens to:**
+
+- **One program** - e.g. **Discord** or **Vesktop**, so you hear a call translated without
+  VRChat, music or videos mixed in. Pick it from the list or type its name; Discord PTB /
+  Canary count as Discord. Windows 11 (process loopback) and Linux (PipeWire - the program
+  shows up once it plays sound; Discord only during a call). Earshot waits while the program
+  isn't running and finds it again when it restarts.
+- **VRChat only** (Linux, PipeWire).
+- **Everything you hear** (the default output).
+- **An input device**, e.g. a virtual cable. On Windows 10 that's the way to hear a single
+  program: set its output to the cable in Windows' sound settings.
 
 Everything stays on your PC, nothing is saved unless you press *Save…*, and what other players
 say is never sent to the chatbox.

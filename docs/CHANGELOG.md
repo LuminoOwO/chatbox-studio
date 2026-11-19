@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.36
+- **Earshot can listen to one program** - e.g. **Discord** or **Vesktop**: *🎧 Earshot ›
+  Sound › One program…*. Only that program's sound is transcribed and translated, without
+  VRChat, music or videos. Pick it from the list or type its name (Discord PTB / Canary
+  count as Discord).
+  - Windows 11: process loopback - the program and its helper processes, nothing else; no
+    virtual cable needed. (Windows 10 doesn't have it - a virtual cable as input device
+    still works there.)
+  - Linux: the program's PipeWire stream; it shows up once it plays sound (Discord only
+    during a call).
+  - Waits while the program isn't running or silent, and picks it up again when it
+    restarts. Works with the Earshot chat window.
+
 ## 1.35
 - **Earshot chat window** (*🖵 Subtitles › Earshot chat*, Ctrl+E): what Earshot hears
   around you as a chat for OBS or a second screen - one message per sentence with its

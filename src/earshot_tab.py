@@ -16,9 +16,11 @@ import languages
 import smart
 
 SOURCES_LINUX = [("vrchat", "VRChat only (recommended)"),
+                 ("app", "One program… (e.g. Discord, Vesktop)"),
                  ("output", "Everything you hear (default output)"),
                  ("device", "An input device…")]
 SOURCES_WINDOWS = [("output", "Everything you hear (default output)"),
+                   ("app", "One program… (e.g. Discord, Vesktop - Windows 11)"),
                    ("device", "An input device… (e.g. a virtual cable for VRChat)")]
 
 
@@ -77,13 +79,35 @@ class EarshotTab(QWidget):
         i = self.source.findData(self.cfg.get("source"))
         self.source.setCurrentIndex(max(0, i))
         self.source.currentIndexChanged.connect(self._source)
-        f.addRow("Game sound", self.source)
+        f.addRow("Sound", self.source)
         self.device = QComboBox()
         self.device.addItems(ES.list_input_devices())
         if self.cfg.get("device"):
             self.device.setCurrentText(self.cfg["device"])
         self.device.currentTextChanged.connect(lambda v: self._set("device", v))
         f.addRow("Device", self.device)
+        self.app = QComboBox(editable=True)
+        self.app.setToolTip("The program whose sound Earshot listens to - pick one or type "
+                            "its name (e.g. Discord, Vesktop). Discord PTB / Canary count as "
+                            "Discord.")
+        self.app.lineEdit().setPlaceholderText("e.g. Discord")
+        self._fill_apps()
+        # only when a name is picked or typing is done - not on every key
+        self.app.activated.connect(lambda _i: self._set("app", self.app.currentText().strip()))
+        self.app.lineEdit().editingFinished.connect(
+            lambda: self.app.currentText().strip() != (self.cfg.get("app") or "")
+            and self._set("app", self.app.currentText().strip()))
+        app_row = QWidget()
+        al = QHBoxLayout(app_row)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.addWidget(self.app, 1)
+        refresh = QPushButton("↻")
+        refresh.setToolTip("Look for programs again")
+        refresh.setFixedWidth(36)
+        refresh.clicked.connect(self._fill_apps)
+        al.addWidget(refresh)
+        self._app_row = app_row
+        f.addRow("Program", app_row)
         self.meter = meter_cls()
         f.addRow("Level", self.meter)
         self.status = hint("Off")
@@ -255,6 +279,16 @@ class EarshotTab(QWidget):
     def _toggle(self, on):
         self._set("enabled", bool(on), smart_=True)
 
+    def _fill_apps(self):
+        import app_audio as AA
+        cur = self.cfg.get("app") or ""
+        self.app.blockSignals(True)
+        self.app.clear()
+        for name in AA.list_programs():
+            self.app.addItem(name)
+        self.app.setCurrentText(cur)
+        self.app.blockSignals(False)
+
     def _source(self, _i):
         self._set("source", self.source.currentData())
 
@@ -282,8 +316,10 @@ class EarshotTab(QWidget):
                         else "Earshot is off - click to turn on")
         try:
             self._form.setRowVisible(self.device, self.cfg.get("source") == "device")
+            self._form.setRowVisible(self._app_row, self.cfg.get("source") == "app")
         except AttributeError:                          # Qt < 6.4
             self.device.setVisible(self.cfg.get("source") == "device")
+            self._app_row.setVisible(self.cfg.get("source") == "app")
         src = self.cfg.get("source")
         self.src_hint.setText({
             "vrchat": "Records only VRChat's sound (PipeWire), so music and Discord stay out.",
@@ -294,10 +330,20 @@ class EarshotTab(QWidget):
                       "can end up in the conversation. To hear only VRChat, set VRChat's "
                       "output to a virtual cable (e.g. VB-CABLE) in Windows' sound settings "
                       "and pick that cable here as an input device.",
+            "app": ("Records only this program's sound - e.g. a Discord call, so VRChat, "
+                    "music and videos stay out. "
+                    + ("Needs Windows 11." if ES.IS_WINDOWS else
+                       "Needs PipeWire; the program shows up once it plays sound.")),
             "device": "Any input device - e.g. a virtual cable or a Voicemeeter output that "
                       "only carries VRChat.",
         }.get(src, ""))
-        if ES.IS_WINDOWS and src != "device":
+        if ES.IS_WINDOWS and src == "app":
+            import app_audio as AA
+            if not AA.windows_supported():
+                self.src_hint.setText("⚠ Listening to one program needs Windows 11. On "
+                                      "Windows 10, set the program's output to a virtual "
+                                      "cable (e.g. VB-CABLE) and pick “An input device…”.")
+        elif ES.IS_WINDOWS and src != "device":
             import importlib.util
             if importlib.util.find_spec("soundcard") is None:
                 self.src_hint.setText("⚠ Listening to the game isn't installed. Add “Earshot: "
