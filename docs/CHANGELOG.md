@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.35
+- **Earshot chat window** (*🖵 Subtitles › Earshot chat*, Ctrl+E): what Earshot hears
+  around you as a chat for OBS or a second screen - one message per sentence with its
+  translation, newest at the bottom, your own lines on the right in their own colour. No
+  names (Earshot can't tell people apart); optionally an icon or "Room" / "You", the
+  language and the time. How many messages, when they vanish, and which text to show are
+  settings.
+- **More subtitle options** (both windows):
+  - ready-made looks: Outlined, Caption box (green screen), Shadow, Chroma green, Yellow
+  - a box / bubbles behind the text with colour and opacity, drop shadow, CAPITALS, line
+    spacing, width, left / centre / right, fade in and out
+  - subtitles: the language in front of each line (EN · …)
+- *🖵 Subtitles* at the top is now a menu with both windows.
+
 ## 1.34
 - **Subtitle window** (*🖵 Subtitles* at the top, Ctrl+T): what you say as big outlined
   text on a black background, in a window of its own - for OBS (*Window Capture*, blend

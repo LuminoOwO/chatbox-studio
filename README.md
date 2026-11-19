@@ -286,19 +286,35 @@ VRChat to a virtual cable and pick that cable.
 Everything stays on your PC, nothing is saved unless you press *Save…*, and what other players
 say is never sent to the chatbox.
 
-## 🖵 Subtitles for OBS and second screens
+## 🖵 Subtitles and Earshot chat for OBS and second screens
 
-**🖵 Subtitles** at the top (Ctrl+T) opens a window that shows what you say - the
-translation, what you said, or both - as big outlined text on a black background. It shows
-the same filtered text as the chatbox and empties itself after a few seconds of quiet.
+**🖵 Subtitles** at the top opens two windows, for OBS (*Window Capture*), a second screen
+or a stream overlay:
 
-- **OBS:** add a *Window Capture* source and pick **Chatbox Studio - Subtitles**. On black,
-  set the source's blend mode to *Screen* or *Add*; or switch the window to the green
-  background and add a *Chroma Key* filter.
-- **Right-click the window** for its settings: font and size, colours, outline, background
-  (black, green, blue, magenta or any colour), position, how many sentences stay, when it
-  empties, typed messages, always on top. **Double-click:** full screen.
-- It remembers its size, place and whether it was open.
+- **Subtitles** (Ctrl+T) - what you say, as big text: the translation, what you said, or
+  both. The same filtered text as the chatbox (typed messages too, if you like); it empties
+  after a few seconds of quiet.
+- **Earshot chat** (Ctrl+E) - what [Earshot](#-earshot-experimental) hears around you, as
+  a chat: one message per sentence with its translation, newest at the bottom, your own
+  lines on the right. No names - Earshot can't tell people apart - just an icon or
+  "Room" / "You" if you want, the language and the time.
+
+**Right-click a window** for its settings - changes show right away:
+
+- *Look*: ready-made styles - Outlined, Caption box (green screen), Shadow, Chroma green,
+  Yellow (classic TV).
+- Text: font, size, bold, CAPITALS, colours, outline, drop shadow, line spacing, width,
+  left / centre / right.
+- Background: black, green, blue, magenta or any colour; a box (subtitles) or bubbles (chat)
+  behind the text, with their colour and opacity; fade in and out.
+- Subtitles: position, how many sentences stay, when it empties, the language in front.
+  Chat: how many messages, when they vanish, your own lines or not, which side.
+- Always on top; **double-click** for full screen.
+
+**In OBS:** add a *Window Capture* source and pick **Chatbox Studio - Subtitles** or
+**Chatbox Studio - Earshot**. On black, set the source's blend mode to *Screen* or *Add*;
+or use a green background and a *Chroma Key* filter (boxes and bubbles at 100 % opacity
+then). Both windows remember their size, place and whether they were open.
 
 ## Appearance and keyboard
 
@@ -312,6 +328,7 @@ Pine**, plus a text size from Small to Largest. Every control can be reached wit
 | Ctrl+H | Hide extras (privacy) |
 | Ctrl+L | Clear the chatbox in VRChat (and the subtitle window) |
 | Ctrl+T | Subtitle window |
+| Ctrl+E | Earshot chat window |
 | Ctrl+1 / 2 / 3 | Speech & translation / Chatbox / Earshot tab |
 | Ctrl+, | Settings |
 | F1 | Help |

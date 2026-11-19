@@ -1,10 +1,14 @@
 """
-Subtitle window: what you say (and its translation) as big text on a plain background, in
-a window of its own - for OBS (Window Capture, or a chroma key on a green background),
-a second screen, or anything else that shows a window.
+Windows for OBS, a second screen or a stream overlay:
 
-Right-click the window for its settings. Double-click: full screen. The settings live in
-settings.extra["subtitles"].
+* **Subtitles** - what you say (and its translation) as big text on a plain background.
+* **Earshot chat** - what Earshot hears around you, as a chat: one message per sentence,
+  newest at the bottom. No names (Earshot can't tell people apart): optionally an icon or
+  "You" / "Room", and your own lines on the other side.
+
+Both: right-click for settings, double-click for full screen. A fixed window title each, so
+OBS's Window Capture finds them again. Settings live in settings.extra["subtitles"] and
+settings.extra["earshot_chat"].
 """
 
 from __future__ import annotations
@@ -12,50 +16,78 @@ from __future__ import annotations
 import time
 from collections import deque
 
-from PySide6.QtCore import QPointF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFontComboBox, QFormLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QSpinBox, QWidget,
+    QFontComboBox, QFormLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
+import languages
 from version import APP_NAME
 
-# The window title OBS's Window Capture remembers - keep it the same.
-TITLE = f"{APP_NAME} - Subtitles"
+SUB_TITLE = f"{APP_NAME} - Subtitles"
+CHAT_TITLE = f"{APP_NAME} - Earshot"
+TITLE = SUB_TITLE                      # (1.34 name)
 
-DEFAULTS = {
+# --------------------------------------------------------------------------- settings
+STYLE = {                              # both windows
     "open": False,
-    "show": "translation",       # translation | original | both
-    "typed": True,               # typed messages too
-    "font": "",                  # "" = the app's font
+    "font": "",                        # "" = the app's font
     "size": 44,
     "bold": True,
+    "uppercase": False,
     "color": "#ffffff",
     "original_color": "#bfc6cf",
-    "outline": 4,                # px, 0 = none
+    "outline": 4,                      # px, 0 = none
     "outline_color": "#000000",
+    "shadow": False,
     "background": "#000000",
-    "align": "bottom",           # bottom | center | top
-    "sentences": 2,              # how many recent sentences stay
-    "clear_after": 10.0,         # s without new speech until it's empty; 0 = never
+    "box": False,                      # a box behind the text (caption style)
+    "box_color": "#000000",
+    "box_opacity": 70,                 # %
+    "align_h": "center",               # left | center | right
+    "max_width": 94,                   # % of the window
+    "line_spacing": 108,               # %
+    "fade": True,                      # fade in / out
     "on_top": False,
-    "geometry": None,            # [x, y, w, h]
+    "geometry": None,
+}
+SUB_DEFAULTS = dict(STYLE, show="translation", typed=True, align="bottom", sentences=2,
+                    clear_after=10.0, lang_tag=False)
+CHAT_DEFAULTS = dict(STYLE, size=30, outline=0, box=True, box_opacity=85, align_h="left",
+                     max_width=80, show="both", mine=True, labels="icons", timestamps=False,
+                     lang_tag=True, sides=True, box_mine="#1f6f43", box_color="#262b33",
+                     messages=8, clear_after=0.0)
+
+PRESETS = {
+    "Outlined": dict(outline=4, shadow=False, box=False, background="#000000",
+                     color="#ffffff"),
+    # an opaque box: a chroma key keeps it whole (a see-through one would turn green)
+    "Caption box (green screen)": dict(outline=0, shadow=False, box=True,
+                                       box_color="#141414", box_opacity=100,
+                                       background="#00ff00", color="#ffffff"),
+    "Shadow": dict(outline=0, shadow=True, box=False, background="#000000", color="#ffffff"),
+    "Chroma green": dict(outline=4, shadow=False, box=False, background="#00ff00",
+                         color="#ffffff", outline_color="#000000"),
+    "Yellow (classic TV)": dict(outline=3, shadow=False, box=False, background="#000000",
+                                color="#ffe14d", outline_color="#000000"),
 }
 BACKGROUNDS = [("Black", "#000000"), ("Green (chroma key)", "#00ff00"),
                ("Blue (chroma key)", "#0000ff"), ("Magenta (chroma key)", "#ff00ff")]
-SHOW = [("Translation", "translation"), ("What you said", "original"),
-        ("Both (what you said above)", "both")]
-ALIGN = [("Bottom", "bottom"), ("Middle", "center"), ("Top", "top")]
+SHOW = [("Translation", "translation"), ("What was said", "original"),
+        ("Both", "both")]
 
 
-def config(extra: dict) -> dict:
-    cfg = extra.get("subtitles")
+def config(extra: dict, key: str = "subtitles") -> dict:
+    defaults = CHAT_DEFAULTS if key == "earshot_chat" else SUB_DEFAULTS
+    cfg = extra.get(key)
     if not isinstance(cfg, dict):
         cfg = {}
-    for k, v in DEFAULTS.items():
+    for k, v in defaults.items():
         cfg.setdefault(k, v)
-    extra["subtitles"] = cfg
+    extra[key] = cfg
     return cfg
 
 
@@ -63,6 +95,7 @@ def wrap(text: str, fm: QFontMetricsF, width: float) -> list[str]:
     """Word wrap; words wider than the line (or text without spaces, e.g. Japanese) are
     broken between characters."""
     out = []
+    width = max(width, fm.horizontalAdvance("W") * 2)
     for para in text.split("\n"):
         line = ""
         for word in para.split(" "):
@@ -84,122 +117,121 @@ def wrap(text: str, fm: QFontMetricsF, width: float) -> list[str]:
     return [x for x in out if x.strip()]
 
 
-class SubtitleWindow(QWidget):
+def _alpha(color: str, opacity_pct) -> QColor:
+    c = QColor(color)
+    c.setAlpha(int(255 * max(0, min(100, int(opacity_pct))) / 100))
+    return c
+
+
+# --------------------------------------------------------------------------- base window
+class OverlayWindow(QWidget):
+    """Shared by both windows: background, fonts, drawing outlined text, the menu."""
     closed = Signal()
     changed = Signal()             # settings changed (save them)
+    TITLE = SUB_TITLE
 
     def __init__(self, cfg: dict):
         super().__init__(None, Qt.Window)
         self.cfg = cfg
-        self.setWindowTitle(TITLE)
+        self.setWindowTitle(self.TITLE)
         self.setMinimumSize(320, 120)
         self.setAttribute(Qt.WA_OpaquePaintEvent)
-        self.entries: deque = deque()      # (time, [(kind, text)])
-        self._timer = QTimer(self, interval=500, timeout=self._expire)
+        self._timer = QTimer(self, interval=500, timeout=self._tick)
         self._timer.start()
         g = cfg.get("geometry")
         if isinstance(g, list) and len(g) == 4:
             self.setGeometry(*[int(x) for x in g])
         else:
-            self.resize(1280, 260)
+            self.resize(*self.default_size())
         self.apply()
 
-    # ---- content
-    def add(self, original: str, translations: list[str]):
-        """One sentence: what was said and its translations (empty when not translated)."""
-        show = self.cfg["show"]
-        parts = []
-        if show in ("original", "both") and original.strip():
-            parts.append(("orig" if show == "both" else "main", original.strip()))
-        if show in ("translation", "both"):
-            trs = [t.strip() for t in translations if t.strip()]
-            if not trs and show == "translation":
-                trs = [original.strip()] if original.strip() else []   # nothing to translate
-            parts += [("main", t) for t in trs]
-        if not parts:
-            return
-        self.entries.append((time.monotonic(), parts))
-        while len(self.entries) > max(1, int(self.cfg["sentences"])):
-            self.entries.popleft()
-        self.update()
+    def default_size(self):
+        return 1280, 260
 
-    def clear(self):
-        self.entries.clear()
-        self.update()
-
-    def _expire(self):
-        after = float(self.cfg.get("clear_after") or 0)
-        if after > 0 and self.entries and time.monotonic() - self.entries[-1][0] > after:
-            self.clear()
+    # ---- to override
+    def _tick(self):
+        pass
 
     def sample(self):
-        self.add("This is how your subtitles look.",
-                 ["And this is where the translation shows."])
+        pass
 
-    # ---- look
+    def clear(self):
+        pass
+
+    def fields(self) -> list:
+        return []
+
+    # ---- helpers
     def apply(self):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(self.cfg["on_top"]))
         self.update()
 
-    def _font(self, scale: float = 1.0) -> QFont:
+    def font_for(self, scale: float = 1.0) -> QFont:
         f = QFont(self.cfg["font"]) if self.cfg["font"] else QFont(self.font())
         f.setPixelSize(max(8, int(int(self.cfg["size"]) * scale)))
         f.setBold(bool(self.cfg["bold"]))
         return f
 
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.fillRect(self.rect(), QColor(self.cfg["background"]))
-        margin = max(12.0, self.width() * 0.03)
-        width = self.width() - 2 * margin
-        outline = float(self.cfg["outline"])
-        rows = []                                   # (font, color, line, metrics)
-        heights = []
-        for n, (_t, parts) in enumerate(self.entries):
-            first = True
-            for kind, text in parts:
-                font = self._font(0.62 if kind == "orig" else 1.0)
-                color = self.cfg["original_color"] if kind == "orig" else self.cfg["color"]
-                fm = QFontMetricsF(font)
-                for line in wrap(text, fm, width - 2 * outline):
-                    rows.append((font, color, line, fm))
-                    # a little room between sentences
-                    gap = fm.height() * 0.35 if first and n > 0 else 0.0
-                    heights.append(fm.height() * 1.08 + gap)
-                    first = False
-        if not rows:
+    def text_of(self, text: str) -> str:
+        return text.upper() if self.cfg.get("uppercase") else text
+
+    def line_h(self, fm: QFontMetricsF) -> float:
+        return fm.height() * max(80, int(self.cfg.get("line_spacing", 108))) / 100
+
+    def draw_line(self, p: QPainter, font: QFont, fm: QFontMetricsF, x: float, y: float,
+                  text: str, color: str, plain: bool = False):
+        """One line at (x, top y): shadow, outline, fill. plain: normal text drawing (colour
+        emoji work there, not in outlines)."""
+        if plain:
+            p.setFont(font)
+            p.setPen(QColor(color))
+            p.drawText(QPointF(x, y + fm.ascent()), text)
             return
-        avail = self.height() - 2 * margin
-        while rows and sum(heights) > avail:        # too much: the oldest lines go first
-            rows.pop(0)
-            heights.pop(0)
-        total = sum(heights)
-        align = self.cfg["align"]
-        y = (margin if align == "top" else self.height() - margin - total if align == "bottom"
-             else (self.height() - total) / 2)
-        pen = QPen(QColor(self.cfg["outline_color"]), outline * 2)
-        pen.setJoinStyle(Qt.RoundJoin)
-        for (font, color, line, fm), h in zip(rows, heights):
-            x = (self.width() - fm.horizontalAdvance(line)) / 2
-            path = QPainterPath()
-            path.addText(QPointF(x, y + h - fm.height() * 1.08 + fm.ascent()), font, line)
-            if outline > 0:
-                p.strokePath(path, pen)
-            p.fillPath(path, QColor(color))
-            y += h
+        path = QPainterPath()
+        path.addText(QPointF(x, y + fm.ascent()), font, text)
+        if self.cfg.get("shadow"):
+            off = max(2.0, fm.height() * 0.06)
+            p.fillPath(path.translated(off, off), QColor(0, 0, 0, 200))
+        outline = float(self.cfg.get("outline") or 0)
+        if outline > 0:
+            pen = QPen(QColor(self.cfg["outline_color"]), outline * 2)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.strokePath(path, pen)
+        p.fillPath(path, QColor(color))
+
+    def x_for(self, w: float, left: float, right: float) -> float:
+        a = self.cfg.get("align_h", "center")
+        if a == "left":
+            return left
+        if a == "right":
+            return right - w
+        return (left + right - w) / 2
+
+    def fade_of(self, born: float, now: float, life: float) -> float:
+        if not self.cfg.get("fade"):
+            return 1.0
+        a = min(1.0, (now - born) / 0.25)
+        if life > 0:
+            a = min(a, max(0.0, (born + life - now) / 1.0))
+        return max(0.0, a)
+
+    def animating(self, on: bool):
+        self._timer.setInterval(33 if on else 500)
 
     # ---- window
     def contextMenuEvent(self, e):
         m = QMenu(self)
-        m.addAction("Subtitle settings…", self.open_settings)
+        m.addAction("Settings…", self.open_settings)
+        presets = m.addMenu("Look")
+        for name in PRESETS:
+            presets.addAction(name, lambda n=name: self.use_preset(n))
         m.addAction("Show a sample", self.sample)
         m.addAction("Clear", self.clear)
         m.addSeparator()
         top = m.addAction("Always on top")
         top.setCheckable(True)
         top.setChecked(bool(self.cfg["on_top"]))
-        top.toggled.connect(lambda on: self._set("on_top", on))
+        top.toggled.connect(lambda on: self.set_opt("on_top", on))
         full = m.addAction("Full screen (double-click)")
         full.setCheckable(True)
         full.setChecked(self.isFullScreen())
@@ -208,13 +240,21 @@ class SubtitleWindow(QWidget):
         m.addAction("Close", self.close)
         m.exec(e.globalPos())
 
+    def use_preset(self, name: str):
+        for k, v in PRESETS[name].items():
+            if k == "box_color" and isinstance(self, ChatWindow):
+                continue                       # the chat keeps its bubble colours
+            self.cfg[k] = v
+        self.update()
+        self.changed.emit()
+
     def mouseDoubleClickEvent(self, _e):
         self._toggle_full()
 
     def _toggle_full(self):
         self.showNormal() if self.isFullScreen() else self.showFullScreen()
 
-    def _set(self, key, value):
+    def set_opt(self, key, value):
         self.cfg[key] = value
         if key == "on_top":
             self.apply()
@@ -241,9 +281,274 @@ class SubtitleWindow(QWidget):
         super().closeEvent(e)
 
     def open_settings(self):
-        SubtitleSettings(self).exec()
+        OverlaySettings(self).exec()
 
 
+# --------------------------------------------------------------------------- subtitles
+class SubtitleWindow(OverlayWindow):
+    TITLE = SUB_TITLE
+
+    def __init__(self, cfg: dict):
+        self.entries: deque = deque()      # (time, [(kind, text, lang)])
+        super().__init__(cfg)
+
+    def add(self, original: str, translations: list, src: str = "", dsts: list | None = None):
+        """One sentence: what was said and its translations (empty when not translated)."""
+        show = self.cfg["show"]
+        dsts = list(dsts or [])
+        parts = []
+        if show in ("original", "both") and original.strip():
+            parts.append(("orig" if show == "both" else "main", original.strip(), src))
+        if show in ("translation", "both"):
+            trs = [(t.strip(), dsts[i] if i < len(dsts) else "")
+                   for i, t in enumerate(translations) if t.strip()]
+            if not trs and show == "translation" and original.strip():
+                trs = [(original.strip(), src)]        # nothing to translate
+            parts += [("main", t, lang) for t, lang in trs]
+        if not parts:
+            return
+        self.entries.append((time.monotonic(), parts))
+        while len(self.entries) > max(1, int(self.cfg["sentences"])):
+            self.entries.popleft()
+        self.animating(bool(self.cfg.get("fade")))
+        self.update()
+
+    def clear(self):
+        self.entries.clear()
+        self.update()
+
+    def _tick(self):
+        now = time.monotonic()
+        after = float(self.cfg.get("clear_after") or 0)
+        if after > 0 and self.entries and now - self.entries[-1][0] > after:
+            self.clear()
+        moving = self.cfg.get("fade") and any(
+            now - t < 0.3 or (after > 0 and now > t + after - 1.1) for t, _p in self.entries)
+        self.animating(bool(moving))
+        if moving:
+            self.update()
+
+    def sample(self):
+        self.add("This is how your subtitles look.",
+                 ["And this is where the translation shows."], "en", ["en"])
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.fillRect(self.rect(), QColor(self.cfg["background"]))
+        margin = max(12.0, self.width() * 0.03)
+        maxw = self.width() * max(30, min(100, int(self.cfg["max_width"]))) / 100 - 2 * margin
+        maxw = min(maxw, self.width() - 2 * margin)
+        pad = (int(self.cfg["size"]) * 0.28) if self.cfg.get("box") else 0.0
+        inner = maxw - 2 * pad - 2 * float(self.cfg.get("outline") or 0)
+        now = time.monotonic()
+        life = float(self.cfg.get("clear_after") or 0)
+
+        blocks = []                         # (alpha, [(font, fm, color, line, h)])
+        for born, parts in self.entries:
+            rows = []
+            for kind, text, lang in parts:
+                font = self.font_for(0.62 if kind == "orig" else 1.0)
+                fm = QFontMetricsF(font)
+                color = self.cfg["original_color"] if kind == "orig" else self.cfg["color"]
+                tag = f"{lang.upper()} · " if self.cfg.get("lang_tag") and lang else ""
+                for line in wrap(tag + self.text_of(text), fm, inner):
+                    rows.append((font, fm, color, line, self.line_h(fm)))
+            if rows:
+                blocks.append((self.fade_of(born, now, life), rows))
+        if not blocks:
+            return
+        gap = int(self.cfg["size"]) * 0.3
+        heights = [sum(r[4] for r in rows) + 2 * pad for _a, rows in blocks]
+        avail = self.height() - 2 * margin
+        while len(blocks) > 1 and sum(heights) + gap * (len(blocks) - 1) > avail:
+            blocks.pop(0)                    # too much: the oldest sentences go first
+            heights.pop(0)
+        total = sum(heights) + gap * (len(blocks) - 1)
+        align = self.cfg["align"]
+        y = (margin if align == "top" else self.height() - margin - total if align == "bottom"
+             else (self.height() - total) / 2)
+        for (alpha, rows), h in zip(blocks, heights):
+            p.setOpacity(alpha)
+            width = max(fm.horizontalAdvance(line) for _f, fm, _c, line, _h in rows)
+            if self.cfg.get("box"):
+                bx = self.x_for(width + 2 * pad, margin, self.width() - margin)
+                p.setPen(Qt.NoPen)
+                p.setBrush(_alpha(self.cfg["box_color"], self.cfg["box_opacity"]))
+                p.drawRoundedRect(QRectF(bx, y, width + 2 * pad, h), pad * 0.6, pad * 0.6)
+            ly = y + pad
+            for font, fm, color, line, lh in rows:
+                lw = fm.horizontalAdvance(line)
+                if self.cfg.get("box"):
+                    a = self.cfg.get("align_h", "center")
+                    lx = (bx + pad if a == "left" else bx + pad + width - lw if a == "right"
+                          else bx + pad + (width - lw) / 2)
+                else:
+                    lx = self.x_for(lw, margin, self.width() - margin)
+                self.draw_line(p, font, fm, lx, ly + (lh - fm.height()) / 2, line, color)
+                ly += lh
+            y += h + gap
+        p.setOpacity(1.0)
+
+    def fields(self):
+        return [
+            ("Show", "combo", "show", SHOW),
+            ("", "check", "typed", "Also messages you type"),
+            ("", "check", "lang_tag", "Language in front (EN · …)"),
+            ("Position", "combo", "align", [("Bottom", "bottom"), ("Middle", "center"),
+                                           ("Top", "top")]),
+            ("Sentences shown", "spin", "sentences", (1, 6, "")),
+            ("Empty after", "dspin", "clear_after", (0, 600, " s", "never")),
+        ]
+
+
+# --------------------------------------------------------------------------- Earshot chat
+class ChatWindow(OverlayWindow):
+    """What Earshot hears, as chat messages (no names - Earshot can't tell people apart)."""
+    TITLE = CHAT_TITLE
+
+    def __init__(self, cfg: dict):
+        self.msgs: deque = deque(maxlen=60)   # (born, line)
+        super().__init__(cfg)
+
+    def default_size(self):
+        return 620, 760
+
+    def add(self, ln):
+        if ln.who != "them" and not self.cfg.get("mine", True):
+            return
+        self.msgs.append((time.monotonic(), ln))
+        self.animating(bool(self.cfg.get("fade")))
+        self.update()
+
+    def clear(self):
+        self.msgs.clear()
+        self.update()
+
+    def _tick(self):
+        now = time.monotonic()
+        life = float(self.cfg.get("clear_after") or 0)
+        if life > 0:
+            while self.msgs and now - self.msgs[0][0] > life:
+                self.msgs.popleft()
+                self.update()
+        moving = self.cfg.get("fade") and any(
+            now - t < 0.3 or (life > 0 and now > t + life - 1.1) for t, _l in self.msgs)
+        self.animating(bool(moving))
+        if moving:
+            self.update()
+
+    def sample(self):
+        from types import SimpleNamespace as NS
+        t = time.time()
+        for who, lang, text, tr in (
+                ("them", "es", "¿Alguien sabe dónde está el mundo del espejo?",
+                 "Does anyone know where the mirror world is?"),
+                ("you", "en", "It's in the back, past the stairs.",
+                 "Está atrás, pasando las escaleras."),
+                ("them", "es", "¡Gracias!", "Thanks!")):
+            self.add(NS(t=t, who=who, lang=lang, text=text, translation=tr))
+
+    def _texts(self, ln) -> list:
+        """[(kind, text)] for a message: main text + optional small second line."""
+        show = self.cfg["show"]
+        said, tr = ln.text.strip(), (ln.translation or "").strip()
+        if ln.who != "them":                       # you: what you said, what was sent
+            tr = tr if tr and tr != said else ""
+        if show == "original" or not tr:
+            return [("main", said)]
+        if show == "translation":
+            return [("main", tr)]
+        return [("main", tr), ("orig", said)] if ln.who == "them" else \
+            [("main", said), ("orig", tr)]
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.fillRect(self.rect(), QColor(self.cfg["background"]))
+        margin = max(10.0, self.width() * 0.025)
+        maxw = (self.width() - 2 * margin) * max(30, min(100, int(self.cfg["max_width"]))) / 100
+        box = bool(self.cfg.get("box"))
+        pad = int(self.cfg["size"]) * (0.45 if box else 0.0)
+        now = time.monotonic()
+        life = float(self.cfg.get("clear_after") or 0)
+        small = self.font_for(0.55)
+        small_fm = QFontMetricsF(small)
+        limit = max(1, int(self.cfg.get("messages", 8)))
+        y = self.height() - margin
+        gap = int(self.cfg["size"]) * 0.35
+        for born, ln in list(self.msgs)[-limit:][::-1]:      # newest at the bottom
+            mine = ln.who != "them"
+            rows = []
+            head = []
+            if self.cfg.get("labels") == "icons":
+                head.append("🗣" if mine else "🎧")
+            elif self.cfg.get("labels") == "words":
+                head.append("You" if mine else "Room")
+            if self.cfg.get("lang_tag") and ln.lang:
+                head.append(languages.name(ln.lang) if self.cfg.get("labels") == "words"
+                            else ln.lang.upper())
+            if self.cfg.get("timestamps"):
+                head.append(time.strftime("%H:%M", time.localtime(getattr(ln, "t", time.time()))))
+            inner = maxw - 2 * pad - 2 * float(self.cfg.get("outline") or 0)
+            if head:
+                rows.append((small, small_fm, self.cfg["original_color"], " · ".join(head),
+                             self.line_h(small_fm)))
+            head_row = rows[0] if head else None
+            for kind, text in self._texts(ln):
+                font = self.font_for(0.68 if kind == "orig" else 1.0)
+                fm = QFontMetricsF(font)
+                color = self.cfg["original_color"] if kind == "orig" else self.cfg["color"]
+                for line in wrap(self.text_of(text), fm, inner):
+                    rows.append((font, fm, color, line, self.line_h(fm)))
+            if not rows:
+                continue
+            width = max(fm.horizontalAdvance(line) for _f, fm, _c, line, _h in rows)
+            h = sum(r[4] for r in rows) + 2 * pad
+            y -= h
+            if y + h < 0:
+                break
+            right = mine and self.cfg.get("sides", True)
+            if right:
+                bx = self.width() - margin - width - 2 * pad
+            else:
+                bx = self.x_for(width + 2 * pad, margin, self.width() - margin) \
+                    if not self.cfg.get("sides", True) else margin
+            p.setOpacity(self.fade_of(born, now, life))
+            if box:
+                p.setPen(Qt.NoPen)
+                col = self.cfg["box_mine"] if mine else self.cfg["box_color"]
+                p.setBrush(_alpha(col, self.cfg["box_opacity"]))
+                p.drawRoundedRect(QRectF(bx, y, width + 2 * pad, h), pad * 0.8, pad * 0.8)
+            ly = y + pad
+            for row in rows:
+                font, fm, color, line, lh = row
+                lx = bx + pad + (width - fm.horizontalAdvance(line) if right else 0)
+                self.draw_line(p, font, fm, lx, ly + (lh - fm.height()) / 2, line, color,
+                               plain=row is head_row)
+                ly += lh
+            y -= gap
+        p.setOpacity(1.0)
+
+    def fields(self):
+        return [
+            ("Show", "combo", "show", [("Translation", "translation"),
+                                       ("What was said", "original"),
+                                       ("Both (the other one small below)", "both")]),
+            ("", "check", "mine", "Your own sentences too"),
+            ("", "check", "sides", "Yours on the right, the room on the left"),
+            ("Mark who's talking", "combo", "labels", [("Icons (🎧 / 🗣)", "icons"),
+                                                       ("Words (Room / You)", "words"),
+                                                       ("Nothing", "none")]),
+            ("", "check", "lang_tag", "Show the language"),
+            ("", "check", "timestamps", "Show the time"),
+            ("Bubble for yours", "color", "box_mine", None),
+            ("Messages shown", "spin", "messages", (1, 30, "")),
+            ("Messages vanish after", "dspin", "clear_after", (0, 3600, " s", "never")),
+        ]
+
+
+# --------------------------------------------------------------------------- settings dialog
 class ColorButton(QPushButton):
     def __init__(self, color: str, on_pick):
         super().__init__()
@@ -263,109 +568,160 @@ class ColorButton(QPushButton):
             self.on_pick(c.name())
 
 
-class SubtitleSettings(QDialog):
-    """Changes show in the subtitle window right away."""
+class OverlaySettings(QDialog):
+    """Changes show in the window right away."""
 
-    def __init__(self, win: SubtitleWindow):
+    def __init__(self, win: OverlayWindow):
         super().__init__(win)
-        self.win, cfg = win, win.cfg
-        self.setWindowTitle("Subtitle settings")
-        form = QFormLayout(self)
+        self.win = win
+        chat = isinstance(win, ChatWindow)
+        self.setWindowTitle("Earshot chat settings" if chat else "Subtitle settings")
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea(widgetResizable=True)
+        body = QWidget()
+        self.form = QFormLayout(body)
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+        self.resize(560, 720)
+        self.widgets = {}
 
-        def combo(items, key):
-            box = QComboBox()
-            for label, val in items:
-                box.addItem(label, val)
-            i = box.findData(cfg[key])
-            box.setCurrentIndex(max(0, i))
-            box.currentIndexChanged.connect(lambda _i: self._set(key, box.currentData()))
-            return box
+        look = QComboBox()
+        look.addItem("Pick a look…", "")
+        for name in PRESETS:
+            look.addItem(name, name)
+        look.currentIndexChanged.connect(lambda _i: look.currentData() and self._preset(
+            look.currentData()))
+        self.form.addRow("Look", look)
+        for spec in win.fields():
+            self._add(*spec)
+        self._heading("Text")
+        for spec in [
+            ("Font", "font", "font", None),
+            ("Size", "spin", "size", (12, 200, " px")),
+            ("", "check", "bold", "Bold"),
+            ("", "check", "uppercase", "CAPITALS"),
+            ("Text colour", "color", "color", None),
+            ("Small text colour", "color", "original_color", None),
+            ("Outline", "spin", "outline", (0, 20, " px")),
+            ("Outline colour", "color", "outline_color", None),
+            ("", "check", "shadow", "Drop shadow"),
+            ("Line spacing", "spin", "line_spacing", (80, 200, " %")),
+            ("Width", "spin", "max_width", (30, 100, " % of the window")),
+            ("Alignment", "combo", "align_h", [("Left", "left"), ("Centre", "center"),
+                                               ("Right", "right")]),
+        ]:
+            self._add(*spec)
+        self._heading("Background")
+        self._background()
+        for spec in [
+            ("", "check", "box", "Bubbles behind the messages" if chat else
+             "Box behind the text (caption style)"),
+            ("Bubble colour" if chat else "Box colour", "color", "box_color", None),
+            ("Opacity", "spin", "box_opacity", (0, 100, " %")),
+            ("", "check", "fade", "Fade in and out"),
+        ]:
+            self._add(*spec)
+        title = win.TITLE
+        hint = QLabel("For OBS: add a <b>Window Capture</b> source and pick "
+                      f"“{title}”. On black, set the source's blend mode to <b>Screen</b> or "
+                      "<b>Add</b>; with a green background, add a <b>Chroma Key</b> filter "
+                      "(boxes and bubbles then need 100 % opacity).",
+                      objectName="hint", wordWrap=True)
+        self.form.addRow(hint)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        sample = buttons.addButton("Show a sample", QDialogButtonBox.ActionRole)
+        sample.clicked.connect(win.sample)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
 
-        form.addRow("Show", combo(SHOW, "show"))
-        typed = QCheckBox("Also messages you type")
-        typed.setChecked(bool(cfg["typed"]))
-        typed.toggled.connect(lambda on: self._set("typed", on))
-        form.addRow("", typed)
+    def _heading(self, text):
+        lab = QLabel(f"<b>{text}</b>")
+        lab.setContentsMargins(0, 10, 0, 0)
+        self.form.addRow(lab)
 
-        font = QFontComboBox()
-        if cfg["font"]:
-            font.setCurrentFont(QFont(cfg["font"]))
-        font.currentFontChanged.connect(lambda f: self._set("font", f.family()))
-        form.addRow("Font", font)
-        row = QHBoxLayout()
-        size = QSpinBox(minimum=12, maximum=200, suffix=" px")
-        size.setValue(int(cfg["size"]))
-        size.valueChanged.connect(lambda v: self._set("size", v))
-        row.addWidget(size)
-        bold = QCheckBox("Bold")
-        bold.setChecked(bool(cfg["bold"]))
-        bold.toggled.connect(lambda on: self._set("bold", on))
-        row.addWidget(bold)
-        row.addStretch()
-        form.addRow("Size", row)
+    def _add(self, label, kind, key, arg):
+        cfg = self.win.cfg
+        if kind == "combo":
+            w = QComboBox()
+            for text, val in arg:
+                w.addItem(text, val)
+            w.setCurrentIndex(max(0, w.findData(cfg[key])))
+            w.currentIndexChanged.connect(lambda _i, w=w: self._set(key, w.currentData()))
+        elif kind == "check":
+            w = QCheckBox(arg)
+            w.setChecked(bool(cfg[key]))
+            w.toggled.connect(lambda on: self._set(key, on))
+        elif kind == "spin":
+            lo, hi, suffix = arg
+            w = QSpinBox(minimum=lo, maximum=hi, suffix=suffix)
+            w.setValue(int(cfg[key]))
+            w.valueChanged.connect(lambda v: self._set(key, v))
+        elif kind == "dspin":
+            lo, hi, suffix, special = arg
+            w = QDoubleSpinBox(minimum=lo, maximum=hi, decimals=0, suffix=suffix)
+            w.setSpecialValueText(special)
+            w.setValue(float(cfg[key]))
+            w.valueChanged.connect(lambda v: self._set(key, v))
+        elif kind == "color":
+            w = ColorButton(cfg[key], lambda c: self._set(key, c))
+        elif kind == "font":
+            w = QFontComboBox()
+            if cfg[key]:
+                w.setCurrentFont(QFont(cfg[key]))
+            w.currentFontChanged.connect(lambda f: self._set(key, f.family()))
+        else:
+            return
+        self.widgets[key] = w
+        self.form.addRow(label, w)
 
-        row = QHBoxLayout()
-        row.addWidget(ColorButton(cfg["color"], lambda c: self._set("color", c)))
-        row.addWidget(QLabel("  what you said (with Both):"))
-        row.addWidget(ColorButton(cfg["original_color"], lambda c: self._set("original_color", c)))
-        row.addStretch()
-        form.addRow("Text colour", row)
-
-        row = QHBoxLayout()
-        outline = QSpinBox(minimum=0, maximum=20, suffix=" px")
-        outline.setValue(int(cfg["outline"]))
-        outline.valueChanged.connect(lambda v: self._set("outline", v))
-        row.addWidget(outline)
-        row.addWidget(ColorButton(cfg["outline_color"], lambda c: self._set("outline_color", c)))
-        row.addStretch()
-        form.addRow("Outline", row)
-
+    def _background(self):
         row = QHBoxLayout()
         bg = QComboBox()
         for label, val in BACKGROUNDS:
             bg.addItem(label, val)
         bg.addItem("Other colour…", "")
-        i = bg.findData(cfg["background"])
+        i = bg.findData(self.win.cfg["background"])
         bg.setCurrentIndex(i if i >= 0 else bg.count() - 1)
-        self.bg_btn = ColorButton(cfg["background"], lambda c: self._set("background", c))
+        btn = ColorButton(self.win.cfg["background"], lambda c: self._set("background", c))
 
-        def bg_changed(_i):
-            val = bg.currentData()
-            if val:
-                self.bg_btn.set(val)
-                self._set("background", val)
+        def changed(_i):
+            if bg.currentData():
+                btn.set(bg.currentData())
+                self._set("background", bg.currentData())
             else:
-                self.bg_btn.click()
-        bg.currentIndexChanged.connect(bg_changed)
+                btn.click()
+        bg.currentIndexChanged.connect(changed)
         row.addWidget(bg)
-        row.addWidget(self.bg_btn)
+        row.addWidget(btn)
         row.addStretch()
-        form.addRow("Background", row)
+        self.form.addRow("Window", row)
+        self.widgets["background"] = (bg, btn)
 
-        form.addRow("Position", combo(ALIGN, "align"))
-        sent = QSpinBox(minimum=1, maximum=6)
-        sent.setValue(int(cfg["sentences"]))
-        sent.valueChanged.connect(lambda v: self._set("sentences", v))
-        form.addRow("Sentences shown", sent)
-        clear = QDoubleSpinBox(minimum=0, maximum=600, decimals=0, suffix=" s")
-        clear.setSpecialValueText("never")
-        clear.setValue(float(cfg["clear_after"]))
-        clear.valueChanged.connect(lambda v: self._set("clear_after", v))
-        form.addRow("Empty after", clear)
-        hint = QLabel("For OBS: add a <b>Window Capture</b> source and pick "
-                      f"“{TITLE}”. With a green background, add a <b>Chroma Key</b> filter "
-                      "to it. Or use the black background with the blend mode "
-                      "<b>Screen</b> / <b>Add</b>.", objectName="hint", wordWrap=True)
-        form.addRow(hint)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        sample = buttons.addButton("Show a sample", QDialogButtonBox.ActionRole)
-        sample.clicked.connect(win.sample)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
+    def _preset(self, name):
+        self.win.use_preset(name)
+        cfg = self.win.cfg
+        for key, w in self.widgets.items():         # show the new values
+            if key == "background":
+                bg, btn = w
+                bg.blockSignals(True)
+                i = bg.findData(cfg[key])
+                bg.setCurrentIndex(i if i >= 0 else bg.count() - 1)
+                bg.blockSignals(False)
+                btn.set(cfg[key])
+                continue
+            w.blockSignals(True)
+            if isinstance(w, QCheckBox):
+                w.setChecked(bool(cfg[key]))
+            elif isinstance(w, (QSpinBox, QDoubleSpinBox)):
+                w.setValue(cfg[key])
+            elif isinstance(w, ColorButton):
+                w.set(cfg[key])
+            elif isinstance(w, QComboBox) and not isinstance(w, QFontComboBox):
+                w.setCurrentIndex(max(0, w.findData(cfg[key])))
+            w.blockSignals(False)
 
     def _set(self, key, value):
-        self.win._set(key, value)
-        if key in ("show", "sentences"):
+        self.win.set_opt(key, value)
+        if key in ("show", "sentences", "mine", "messages"):
             self.win.clear()
             self.win.sample()
-

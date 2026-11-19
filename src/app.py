@@ -167,6 +167,7 @@ class Window(QMainWindow):
         from update_ui import UpdateChecker
         self.updates = UpdateChecker(self)
         self.subs = None                  # the subtitle window, while it's open
+        self.chat_win = None              # the Earshot chat window, while it's open
         self.bridge.log.connect(self.add_log)
         self.bridge.result.connect(self.add_result)
         self.bridge.translator.connect(self.on_translator_state)
@@ -189,7 +190,9 @@ class Window(QMainWindow):
             QTimer.singleShot(0, self.start_engine)
             QTimer.singleShot(5000, self.updates.maybe_check)
         if (self.s.extra.get("subtitles") or {}).get("open"):
-            QTimer.singleShot(0, lambda: self.subs_btn.setChecked(True))
+            QTimer.singleShot(0, lambda: self.subs_act.setChecked(True))
+        if (self.s.extra.get("earshot_chat") or {}).get("open"):
+            QTimer.singleShot(0, lambda: self.chat_act.setChecked(True))
             if not self.s.extra.get("onboarded"):
                 QTimer.singleShot(700, self.show_quick_start)
 
@@ -236,11 +239,18 @@ class Window(QMainWindow):
         self.update_btn = QPushButton("⬆ Update", objectName="primary", visible=False)
         self.update_btn.clicked.connect(lambda: self.updates.open())
         head.addWidget(self.update_btn)
-        self.subs_btn = QPushButton("🖵 Subtitles", checkable=True)
-        self.subs_btn.setToolTip("A window that shows what you say as big text on a black "
-                                 "background - for OBS (Window Capture) or a second screen. "
-                                 "Right-click it for its settings (Ctrl+T)")
-        self.subs_btn.toggled.connect(self.on_subtitles_toggled)
+        self.subs_btn = QPushButton("🖵 Subtitles")
+        self.subs_btn.setToolTip("Windows for OBS (Window Capture) or a second screen: your "
+                                 "subtitles (Ctrl+T) and Earshot as a chat (Ctrl+E). "
+                                 "Right-click a window for its settings")
+        sm = QMenu(self.subs_btn)
+        self.subs_act = sm.addAction("Subtitles - what you say  (Ctrl+T)")
+        self.subs_act.setCheckable(True)
+        self.subs_act.toggled.connect(self.on_subtitles_toggled)
+        self.chat_act = sm.addAction("Earshot chat - what you hear  (Ctrl+E)")
+        self.chat_act.setCheckable(True)
+        self.chat_act.toggled.connect(self.on_earshot_chat_toggled)
+        self.subs_btn.setMenu(sm)
         head.addWidget(self.subs_btn)
         self.help_btn = QPushButton("❔ Help")
         self.help_btn.setToolTip("Quick start, a tour of the window, keyboard shortcuts (F1)")
@@ -545,6 +555,7 @@ class Window(QMainWindow):
                            ("Ctrl+H", "Hide extras (privacy: only speech in the chatbox)"),
                            ("Ctrl+L", "Clear the chatbox in VRChat"),
                            ("Ctrl+T", "Subtitle window (for OBS / a second screen)"),
+                           ("Ctrl+E", "Earshot chat window (for OBS / a second screen)"),
                            ("Ctrl+1 / 2 / 3", "Speech & translation / Chatbox / Earshot tab"),
                            ("Ctrl+,", "Settings"), ("F1", "Help"),
                            ("Tab / Shift+Tab", "Move between controls")):
@@ -608,6 +619,7 @@ class Window(QMainWindow):
             lambda: self.engine and self.engine.install_smart_async())
         self.earshot_tab.add_room_route.connect(self.on_add_room_routes)
         self.bridge.heard.connect(self.earshot_tab.add_line)
+        self.bridge.heard.connect(lambda ln: self.chat_win is not None and self.chat_win.add(ln))
         self.bridge.earshot.connect(self.earshot_tab.set_status)
         self.bridge.room_level.connect(lambda lv, v: self.earshot_tab.meter.set(lv, v))
         self.bridge.smart.connect(self.earshot_tab.update_smart)
@@ -1139,7 +1151,8 @@ class Window(QMainWindow):
         sc("Ctrl+P", self.listen_btn.toggle)
         sc("Ctrl+H", lambda: self.quick._hide_all(not self.s.chatbox.get("hide_extras")))
         sc("Ctrl+L", self.clear_chatbox)
-        sc("Ctrl+T", self.subs_btn.toggle)
+        sc("Ctrl+T", self.subs_act.toggle)
+        sc("Ctrl+E", self.chat_act.toggle)
         sc("Ctrl+1", lambda: self.tabs.setCurrentIndex(0))
         sc("Ctrl+2", lambda: self.tabs.setCurrentIndex(1))
         sc("Ctrl+3", lambda: self.tabs.setCurrentIndex(2))
@@ -1366,23 +1379,34 @@ class Window(QMainWindow):
             cl.setVisible(True)
 
     # ------------------------------------------------------------------ subtitles
-    def on_subtitles_toggled(self, on: bool):
+    def _overlay(self, on: bool, attr: str, key: str, cls_name: str, action):
         import subtitles
-        cfg = subtitles.config(self.s.extra)
+        cfg = subtitles.config(self.s.extra, key)
         cfg["open"] = bool(on)
         self.save()
+        win = getattr(self, attr)
         if on:
-            if self.subs is None:
-                self.subs = subtitles.SubtitleWindow(cfg)
-                self.subs.closed.connect(lambda: self.subs_btn.setChecked(False))
-                self.subs.changed.connect(self.save)
-            self.subs.show()
-            self.subs.raise_()
-        elif self.subs is not None:
-            w, self.subs = self.subs, None
-            w.closed.disconnect()
-            w.close()
-            w.deleteLater()
+            if win is None:
+                win = getattr(subtitles, cls_name)(cfg)
+                win.closed.connect(lambda: action.setChecked(False))
+                win.changed.connect(self.save)
+                setattr(self, attr, win)
+            win.show()
+            win.raise_()
+        elif win is not None:
+            setattr(self, attr, None)
+            win.closed.disconnect()
+            win.close()
+            win.deleteLater()
+
+    def on_subtitles_toggled(self, on: bool):
+        self._overlay(on, "subs", "subtitles", "SubtitleWindow", self.subs_act)
+
+    def on_earshot_chat_toggled(self, on: bool):
+        self._overlay(on, "chat_win", "earshot_chat", "ChatWindow", self.chat_act)
+        if on and not (self.s.earshot or {}).get("enabled"):
+            self.add_log("The Earshot chat window shows what Earshot hears - switch Earshot "
+                         "on in its tab (Ctrl+3).")
 
     def _subtitle_result(self, r: Result):
         if self.subs is None:
@@ -1393,7 +1417,8 @@ class Window(QMainWindow):
         if original and not same and self.engine:
             f = self.engine.filters.apply(original)      # the filters apply here too
             original = "" if f.blocked else f.text
-        self.subs.add(original, [o.text for o in outs if o.translated])
+        trs = [o for o in outs if o.translated]
+        self.subs.add(original, [o.text for o in trs], r.language, [o.dst for o in trs])
 
     def _subtitle_typed(self, text: str, sent: str):
         if self.subs is not None and self.subs.cfg.get("typed", True) and sent:
@@ -1406,9 +1431,10 @@ class Window(QMainWindow):
             self.subs.clear()
 
     def closeEvent(self, e):
-        if self.subs is not None:
-            self.subs.closed.disconnect()
-            self.subs.close()
+        for w in (self.subs, self.chat_win):
+            if w is not None:
+                w.closed.disconnect()
+                w.close()
         save_settings(self.s)
         if self.engine:
             self.engine.stop_audio()
