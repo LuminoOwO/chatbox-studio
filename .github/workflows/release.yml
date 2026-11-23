@@ -15,11 +15,24 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    # Builds on your own PC (RunnerDock; Linux Mint 22 has the same base as ubuntu-24.04). Set the
+    # repository variable USE_MY_PC to false to build on GitHub's runners instead.
+    runs-on: ${{ vars.USE_MY_PC != 'false' && fromJSON('["self-hosted", "Linux", "X64"]') || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
       - name: Packaging tools
-        run: sudo apt-get update && sudo apt-get install -y nsis rpm libarchive-tools zstd
+        run: |
+          PKGS="nsis rpm libarchive-tools zstd"
+          MISSING=$(for p in $PKGS; do dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "ok installed" || printf '%s ' "$p"; done)
+          MISSING=${MISSING% }
+          if [ -z "$MISSING" ]; then echo "All system libraries present"; exit 0; fi
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
+            # no sudo on your own PC: install them once yourself
+            echo "::error::Missing on this machine: $MISSING. Run once: sudo apt install $MISSING"
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y $MISSING
       - name: Check the code
         run: python3 -m compileall -q src build_release.py
       - name: Build packages
