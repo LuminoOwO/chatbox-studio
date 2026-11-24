@@ -368,6 +368,7 @@ def recommend(hw: Hardware, state: Optional[dict] = None) -> Choice:
             c.groups.add("rocm")
         if IS_WINDOWS:
             _windows_amd_to_vulkan(hw, c, state)
+            _cpu_because_unseen(hw, c, state, g)
         return c
     c.groups = {"core", "media", "vr"}      # Earshot (experimental) only when you ask for it
     if g is not None:
@@ -384,6 +385,27 @@ def recommend(hw: Hardware, state: Optional[dict] = None) -> Choice:
         c.nllb = "nllb-200-distilled-600M"
     c.smart = None                          # big: only when you ask for it
     return _from_settings(hw, c)
+
+
+def _cpu_because_unseen(hw: Hardware, c: Choice, state: dict, g: Optional[GPU]):
+    """Windows, 1.38 and older: when the Vulkan check failed, a Radeon wasn't found and the
+    setup put everything on the CPU. If this setup sees a card that the last one didn't,
+    use it - with the model sizes a new install would pick. A CPU you chose while the card
+    was listed stays."""
+    if g is None or c.gpu != "cpu" or g.vendor not in ("vulkan", "amd"):
+        return
+    seen = state.get("gpus_seen")
+    if seen and gpu_key(g) in seen:
+        return                                       # the card was there: CPU was a choice
+    fresh = recommend(hw, None)
+    c.gpu = fresh.gpu
+    c.groups |= {_accel_group(g.vendor)}
+    c.whisper = fresh.whisper
+    if c.nllb:
+        c.nllb = fresh.nllb
+    for k in ("tr_dev", "listen_dev"):
+        if getattr(c, k) == "cpu":
+            setattr(c, k, "same")
 
 
 def _vulkan_twin(hw: Hardware, g: Optional[GPU], device_id: int = 0) -> str:
@@ -561,9 +583,12 @@ def load_state() -> Optional[dict]:
         return None
 
 
-def save_state(c: Choice):
+def save_state(c: Choice, hw: Optional[Hardware] = None):
     STATE.parent.mkdir(parents=True, exist_ok=True)
+    seen = [gpu_key(g) for g in hw.gpus] if hw is not None else (load_state() or {}).get(
+        "gpus_seen", [])
     STATE.write_text(json.dumps({"groups": sorted(c.groups), "whisper": c.whisper,
+                                 "gpus_seen": seen,
                                  "gpu": c.gpu, "gpu_index": c.gpu_index, "nllb": c.nllb,
                                  "smart": c.smart, "tr_dev": c.tr_dev,
                                  "smart_dev": c.smart_dev, "listen_dev": c.listen_dev,

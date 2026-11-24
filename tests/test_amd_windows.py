@@ -120,3 +120,34 @@ def test_vulkan_probe_fails_windows_lists_card_anyway(monkeypatch):
     hw = K.Hardware(cores=8, gpus=vk)
     c = K.preset(hw, "standard")
     assert c.gpu == "vulkan:0" and c.spec("translator") == "vulkan:0"
+
+
+RX9070 = 0x7550
+
+
+def hw_9070():
+    return K.Hardware(cores=8, ram_gb=32, gpus=[
+        G.GPU(0, "AMD Radeon RX 9070 XT", 16304, "amd", arch="gfx1201", maker="amd",
+              device_id=RX9070),
+        G.GPU(0, "AMD Radeon RX 9070 XT", 16304, "vulkan", maker="amd", device_id=RX9070),
+        G.GPU(1, "AMD Radeon(TM) Graphics", 10805, "vulkan", maker="amd", integrated=True,
+              device_id=0x13C0)])
+
+
+def test_cpu_install_from_missed_card_moves_to_it(monkeypatch):
+    windows(monkeypatch)
+    # 1.38: the card wasn't found, so the setup saved everything on the CPU
+    state = {"groups": ["core", "media", "vr"], "gpu": "cpu", "whisper": "small",
+             "nllb": "nllb-200-distilled-600M", "tr_dev": "same"}
+    c = K.recommend(hw_9070(), state)
+    assert c.gpu == "vulkan:0" and "vulkan" in c.groups, c
+    assert c.whisper == "large-v3" and c.nllb == "nllb-200-distilled-1.3B"
+    assert c.spec("translator") == "vulkan:0"
+
+
+def test_cpu_chosen_with_the_card_listed_stays(monkeypatch):
+    windows(monkeypatch)
+    state = {"groups": ["core"], "gpu": "cpu", "whisper": "small", "nllb": None,
+             "gpus_seen": ["amd:0", "vulkan:0", "vulkan:1"]}
+    c = K.recommend(hw_9070(), state)
+    assert c.gpu == "cpu" and "vulkan" not in c.groups

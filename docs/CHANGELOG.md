@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.40
+- **Windows: DirectML finds the graphics card again.** Listing Windows' graphics adapters
+  (what DirectML uses) failed on every Windows PC - a wrong argument type in the Windows
+  call, swallowed silently - so the translator could never use the card. Fixed; tested
+  against simulated Windows adapters. Errors there now show in the hardware report.
+- **Installs that ran on the CPU because the card wasn't found move to the card.** The
+  setup remembers which cards it saw; when it now sees one the last setup didn't (the
+  Windows detection bug of 1.38 and older), it picks the card with the model sizes a new
+  install would choose. A CPU you chose while the card was listed stays.
+- **Cards without their support installed show in the device menus** (*Settings › Speech*
+  and *Translation*) as "… - install its support in the setup…"; picking one opens the
+  setup, instead of the card simply not being there.
+
 ## 1.39
 - **Windows: graphics cards are found even when the Vulkan check fails.** The setup asks
   Vulkan which cards there are, in a helper process; when that failed (a driver, an overlay

@@ -185,6 +185,25 @@ def available_gpus() -> list:
     return out
 
 
+def missing_gpus() -> list:
+    """Cards in this PC that no installed engine can use yet (the setup installs one):
+    [(name, label)]. Shown in the device menus, so the option isn't simply missing."""
+    import gpus
+    have = {g.name for g in available_gpus()}
+    out, seen = [], set()
+    try:
+        found = gpus.amd() + [g for g in gpus.vulkan() if g.maker != "nvidia"]
+    except Exception:
+        found = []
+    for g in found:
+        if g.name in have or g.name in seen:
+            continue
+        seen.add(g.name)
+        short = g.name.replace("AMD Radeon ", "Radeon ")
+        out.append((g.name, f"{short} - install its support in the setup…"))
+    return out
+
+
 def vulkan_extra(have: list) -> list:
     """Vulkan devices not already usable through CUDA (all NVIDIA cards are)."""
     import gpus

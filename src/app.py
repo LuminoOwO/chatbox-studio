@@ -403,6 +403,7 @@ class Window(QMainWindow):
         self.gpu = self._shrink(QComboBox())
         for spec, label in devices.choices():
             self.gpu.addItem(label, spec)
+        self._add_missing_gpus(self.gpu)
         self._select(self.gpu, devices.speech_spec(self.s))
         self.gpu.setToolTip("Where the speech model runs. NVIDIA and AMD cards can be mixed: "
                             "the translator and the Earshot AI can run on another card.")
@@ -444,6 +445,7 @@ class Window(QMainWindow):
         for spec, label in devices.choices(include_same=True,
                                            same_label="Same as the speech model", kind="nllb"):
             self.tr_device.addItem(label, spec)
+        self._add_missing_gpus(self.tr_device)
         tdev = self.s.translator_device if self.s.translator_device not in ("cuda", "") \
             else "same"
         self._select(self.tr_device, tdev)
@@ -739,6 +741,33 @@ class Window(QMainWindow):
     # --------------------------------------------------------------- logic
     def save(self):
         self._save_timer.start()
+
+    def _add_missing_gpus(self, box):
+        """Cards without an installed engine: listed, and picking one opens the setup."""
+        import devices
+        try:
+            missing = devices.missing_gpus()
+        except Exception:
+            missing = []
+        for _name, label in missing:
+            box.addItem(label, "setup")
+            box.setItemData(box.count() - 1, "This card works once its support is installed - "
+                            "the setup does that (your settings stay).", Qt.ToolTipRole)
+        if not missing:
+            return
+        state = {"last": box.currentIndex()}
+
+        def picked(i):
+            if box.itemData(i) != "setup":
+                state["last"] = i
+                return
+            box.blockSignals(True)
+            box.setCurrentIndex(state["last"])
+            box.blockSignals(False)
+            self.add_log("Opening the setup to install support for your graphics card "
+                         "(Custom… lets you pick it for speech and the translator).")
+            self.open_setup()
+        box.currentIndexChanged.connect(picked)
 
     def show_update_button(self, version: str):
         self.update_btn.setText(f"⬆ Update to {version}")

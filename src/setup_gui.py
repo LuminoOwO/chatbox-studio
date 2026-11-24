@@ -56,7 +56,7 @@ def run_cli(update: bool) -> int:
         if r.returncode != 0 and s.kind != "task":
             print(f"ERROR: {s.label} failed.")
             return 1
-    K.save_state(want)
+    K.save_state(want, hw)
     K.apply_settings(want)
     return 0
 
@@ -766,7 +766,7 @@ def run_gui(mode: str) -> int:
             c = run["choice"]
             if any("AMD" in e for e in errors):
                 c.groups.discard("rocm")             # not working yet: run on the CPU
-            K.save_state(c)
+            K.save_state(c, hw)
             K.apply_settings(c, reset=run["reset"])
         refresh()
         next_btn.setText("Finish")

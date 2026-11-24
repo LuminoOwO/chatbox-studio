@@ -280,7 +280,8 @@ def hardware_report() -> str:
     if IS_WINDOWS:
         lines.append("DXGI (DirectML): " + (", ".join(
             f"#{a['index']} {a['name']} ({a['vram_mb']} MB{', software' if a['software'] else ''})"
-            for a in dxgi_adapters()) or "none"))
+            for a in dxgi_adapters()) or "none")
+                     + (f"  ({dxgi_note})" if dxgi_note else ""))
     return "\n".join(lines)
 
 
@@ -430,6 +431,7 @@ def vulkan(include_cpu: bool = False) -> list[GPU]:
 # DirectML (Windows): the adapters in DXGI order - DirectML's device_id is this index
 # --------------------------------------------------------------------------- #
 _dxgi_cache: Optional[list] = None
+dxgi_note = ""
 
 
 def dxgi_adapters() -> list[dict]:
@@ -442,7 +444,9 @@ def dxgi_adapters() -> list[dict]:
     if IS_WINDOWS:
         try:
             out = _dxgi_enum()
-        except Exception:
+        except Exception as e:
+            global dxgi_note
+            dxgi_note = f"DXGI: {type(e).__name__}: {e}"
             out = []
     _dxgi_cache = out
     return out
@@ -456,28 +460,29 @@ def _dxgi_enum() -> list[dict]:
         _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
                     ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
 
-    class LUID(ctypes.Structure):
-        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", ctypes.c_long)]
+    class LUID(ctypes.Structure):          # fixed sizes: the same layout everywhere
+        _fields_ = [("LowPart", ctypes.c_uint32), ("HighPart", ctypes.c_int32)]
 
     class DESC1(ctypes.Structure):
-        _fields_ = [("Description", ctypes.c_wchar * 128), ("VendorId", wintypes.UINT),
-                    ("DeviceId", wintypes.UINT), ("SubSysId", wintypes.UINT),
-                    ("Revision", wintypes.UINT), ("DedicatedVideoMemory", ctypes.c_size_t),
+        _fields_ = [("Description", ctypes.c_wchar * 128), ("VendorId", ctypes.c_uint32),
+                    ("DeviceId", ctypes.c_uint32), ("SubSysId", ctypes.c_uint32),
+                    ("Revision", ctypes.c_uint32), ("DedicatedVideoMemory", ctypes.c_size_t),
                     ("DedicatedSystemMemory", ctypes.c_size_t),
                     ("SharedSystemMemory", ctypes.c_size_t), ("AdapterLuid", LUID),
-                    ("Flags", wintypes.UINT)]
+                    ("Flags", ctypes.c_uint32)]
 
-    def call(obj, index, *args):
-        """COM method `index` of obj's vtable; returns the HRESULT."""
+    def call(obj, index, argtypes=(), *args):
+        """COM method `index` of obj's vtable with these argument types; the HRESULT."""
         vtbl = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
-        types = [ctypes.c_void_p] + [type(a) for a in args]
-        fn = ctypes.WINFUNCTYPE(ctypes.c_long, *types)(vtbl[index])
+        fn = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *argtypes)(vtbl[index])
         return fn(obj, *args)
 
     iid = GUID(0x770AAE78, 0xF26F, 0x4DBA,
                (ctypes.c_ubyte * 8)(0xA8, 0x29, 0x25, 0x3C, 0x83, 0xD1, 0xB3, 0x87))
     factory = ctypes.c_void_p()
     dxgi = ctypes.WinDLL("dxgi.dll")
+    dxgi.CreateDXGIFactory1.restype = ctypes.c_long
+    dxgi.CreateDXGIFactory1.argtypes = [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)]
     if dxgi.CreateDXGIFactory1(ctypes.byref(iid), ctypes.byref(factory)) < 0:
         return []
     out = []
@@ -486,11 +491,13 @@ def _dxgi_enum() -> list[dict]:
         while i < 32:
             adapter = ctypes.c_void_p()
             # IDXGIFactory1::EnumAdapters1 (vtable 12); DXGI_ERROR_NOT_FOUND ends the list
-            if call(factory, 12, wintypes.UINT(i), ctypes.byref(adapter)) < 0:
+            if call(factory, 12, (wintypes.UINT, ctypes.POINTER(ctypes.c_void_p)),
+                    i, ctypes.byref(adapter)) < 0:
                 break
             d = DESC1()
             try:
-                if call(adapter, 10, ctypes.byref(d)) >= 0:          # IDXGIAdapter1::GetDesc1
+                if call(adapter, 10, (ctypes.POINTER(DESC1),),
+                        ctypes.byref(d)) >= 0:                       # IDXGIAdapter1::GetDesc1
                     out.append({"index": i, "name": d.Description.strip(),
                                 "vendor_id": int(d.VendorId), "device_id": int(d.DeviceId),
                                 "vram_mb": int(d.DedicatedVideoMemory) // 2**20,
