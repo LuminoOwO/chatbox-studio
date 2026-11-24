@@ -209,6 +209,81 @@ def _amd_windows() -> list[GPU]:
     return out
 
 
+def _amd_registry_all() -> list[str]:
+    """Every AMD display entry in the registry, for the hardware report."""
+    out = []
+    try:
+        import winreg
+        base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as root:
+            i = 0
+            while True:
+                try:
+                    sub = winreg.EnumKey(root, i)
+                except OSError:
+                    break
+                i += 1
+                try:
+                    with winreg.OpenKey(root, sub) as k:
+                        def val(n):
+                            try:
+                                return winreg.QueryValueEx(k, n)[0]
+                            except OSError:
+                                return ""
+                        desc = str(val("DriverDesc") or "")
+                        if not desc:
+                            continue
+                        mid = str(val("MatchingDeviceId") or "").lower()
+                        m = re.search(r"dev_([0-9a-f]{4})", mid)
+                        arch = AMD_IDS.get(m.group(1), ("", ""))[1] if m else ""
+                        mem = val("HardwareInformation.qwMemorySize") or \
+                            val("HardwareInformation.MemorySize") or 0
+                        if isinstance(mem, bytes):
+                            mem = int.from_bytes(mem[:8], "little")
+                        out.append(f"{desc} | {mid or '?'} | arch {arch or '?'} "
+                                   f"(ROCm: {'yes' if rocm_ok(arch) else 'no'}) | "
+                                   f"{int(mem or 0) // 2**20} MB | driver "
+                                   f"{val('DriverVersion') or '?'}")
+                except OSError:
+                    continue
+    except Exception as e:
+        out.append(f"(registry not readable: {e})")
+    return out
+
+
+def hardware_report() -> str:
+    """What every detection path sees - for bug reports ("Copy hardware report")."""
+    import platform
+    import sys
+    lines = [f"OS: {platform.platform()} | Python {sys.version.split()[0]}"]
+    try:
+        lines.append("NVIDIA: " + (", ".join(f"{g.name} {g.vram_mb} MB" for g in nvidia())
+                                   or "none"))
+    except Exception as e:
+        lines.append(f"NVIDIA: error {e}")
+    if IS_WINDOWS:
+        lines.append("Registry (display adapters):")
+        lines += ["  " + x for x in _amd_registry_all()] or ["  none"]
+    try:
+        lines.append("AMD (ROCm-capable): " + (", ".join(f"{g.name} {g.arch}" for g in amd())
+                                               or "none"))
+    except Exception as e:
+        lines.append(f"AMD: error {e}")
+    try:
+        vk = vulkan(include_cpu=True)
+        lines.append("Vulkan: " + (", ".join(f"#{g.index} {g.name} ({g.maker}, "
+                                             f"{g.vram_mb} MB)" for g in vk) or "none"))
+        if vulkan_note:
+            lines.append("  " + vulkan_note)
+    except Exception as e:
+        lines.append(f"Vulkan: error {e}")
+    if IS_WINDOWS:
+        lines.append("DXGI (DirectML): " + (", ".join(
+            f"#{a['index']} {a['name']} ({a['vram_mb']} MB{', software' if a['software'] else ''})"
+            for a in dxgi_adapters()) or "none"))
+    return "\n".join(lines)
+
+
 def amd() -> list[GPU]:
     return _amd_windows() if IS_WINDOWS else _amd_linux()
 
@@ -279,19 +354,60 @@ def vulkan_probe() -> list[dict]:
     return out
 
 
+vulkan_note = ""          # why the Vulkan check found nothing (hardware report, setup)
+
+
+def _python_exe() -> str:
+    """python.exe rather than pythonw.exe for helper processes: pythonw's output can get
+    lost on Windows."""
+    import sys
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and (exe.parent / "python.exe").exists():
+        return str(exe.parent / "python.exe")
+    return str(exe)
+
+
+def _vulkan_from_dxgi() -> list[dict]:
+    """Windows, when the Vulkan check fails: the graphics adapters Windows lists. The
+    Vulkan loader on Windows numbers the cards in this order too."""
+    out = []
+    hw = [a for a in dxgi_adapters() if not a["software"] and a["vendor_id"] != 0x1414]
+    for i, a in enumerate(hw):
+        integrated = a["vendor_id"] in (0x1002, 0x8086) and a["vram_mb"] < 2048
+        heaps = [(a["vram_mb"], True)] + ([(a.get("shared_mb", 0), False)]
+                                          if integrated else [])
+        out.append({"index": i, "name": a["name"], "vendor_id": a["vendor_id"],
+                    "device_id": a["device_id"], "type": 1 if integrated else 2,
+                    "heaps": heaps, "guessed": True})
+    return out
+
+
 def vulkan(include_cpu: bool = False) -> list[GPU]:
     """Graphics chips usable through Vulkan (whisper.cpp). Software renderers (llvmpipe)
     are left out unless include_cpu."""
-    global _vk_cache
+    global _vk_cache, vulkan_note
     if _vk_cache is None:
-        import sys
         code = ("import json, sys; sys.path.insert(0, %r); import gpus; "
                 "print(json.dumps(gpus.vulkan_probe()))" % str(Path(__file__).resolve().parent))
-        txt = _run([sys.executable, "-c", code], timeout=15)
+        _vk_cache = []
         try:
-            _vk_cache = json.loads(txt.strip().splitlines()[-1]) if txt.strip() else []
-        except (ValueError, IndexError):
-            _vk_cache = []
+            r = subprocess.run([_python_exe(), "-c", code], capture_output=True, text=True,
+                               timeout=20, **paths.hidden_subprocess_kwargs())
+            lines = (r.stdout or "").strip().splitlines()
+            if lines:
+                _vk_cache = json.loads(lines[-1])
+            if not _vk_cache:
+                err = (r.stderr or "").strip().splitlines()
+                vulkan_note = (f"Vulkan check: no devices (exit code {r.returncode}"
+                               + (f": {err[-1][:200]}" if err else "") + ")")
+        except subprocess.TimeoutExpired:
+            vulkan_note = "Vulkan check: no answer within 20 s"
+        except (OSError, ValueError) as e:
+            vulkan_note = f"Vulkan check failed: {e}"
+        if not _vk_cache and IS_WINDOWS:
+            _vk_cache = _vulkan_from_dxgi()
+            if _vk_cache:
+                vulkan_note += " - using Windows' adapter list instead"
     out = []
     for d in _vk_cache:
         if d.get("type") == 4 and not include_cpu:          # CPU (lavapipe / llvmpipe)
@@ -378,6 +494,7 @@ def _dxgi_enum() -> list[dict]:
                     out.append({"index": i, "name": d.Description.strip(),
                                 "vendor_id": int(d.VendorId), "device_id": int(d.DeviceId),
                                 "vram_mb": int(d.DedicatedVideoMemory) // 2**20,
+                                "shared_mb": int(d.SharedSystemMemory) // 2**20,
                                 "software": bool(d.Flags & 2)})       # DXGI_ADAPTER_FLAG_SOFTWARE
             finally:
                 call(adapter, 2)                                     # Release

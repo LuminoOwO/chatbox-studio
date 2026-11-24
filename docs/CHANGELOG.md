@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.39
+- **Windows: graphics cards are found even when the Vulkan check fails.** The setup asks
+  Vulkan which cards there are, in a helper process; when that failed (a driver, an overlay
+  layer, a blocked DLL), the error was thrown away and a Radeon wasn't listed at all. Now
+  the setup falls back to Windows' own adapter list (the same order Vulkan uses), so the card
+  shows up with speech on Vulkan and the translator on DirectML - and the reason the check
+  failed is shown.
+  - The helper runs with python.exe instead of pythonw.exe, whose output can get lost.
+- **Copy hardware report** in the setup: what every detection path sees - the driver's
+  registry entries (with chip and ROCm support), Vulkan, Windows' adapter list, NVIDIA - one
+  click to the clipboard, for bug reports. Also saved as `hardware.txt` in the app's data
+  folder.
+
 ## 1.38
 - **Earshot: more room and adjustable text size.**
   - Earshot tab: **A− / A+** next to the conversation (or Ctrl + mouse wheel) change its

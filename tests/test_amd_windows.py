@@ -97,3 +97,26 @@ def test_dml_index_matches_by_device_id(monkeypatch):
          "device_id": 0x8c, "vram_mb": 0, "software": True}])
     assert devices.dml_index("vulkan:0") == 1
     assert devices.dml_index("vulkan:5") == -1
+
+
+def test_vulkan_probe_fails_windows_lists_card_anyway(monkeypatch):
+    windows(monkeypatch)
+    import subprocess
+
+    class R:
+        returncode, stdout, stderr = 1, "", "OSError: [WinError 126] vulkan-1.dll"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(G.paths, "hidden_subprocess_kwargs", lambda: {})
+    monkeypatch.setattr(G, "_vk_cache", None)
+    monkeypatch.setattr(G, "dxgi_adapters", lambda: [
+        {"index": 0, "name": "AMD Radeon RX 6600", "vendor_id": 0x1002, "device_id": RX6600,
+         "vram_mb": 8176, "shared_mb": 16000, "software": False},
+        {"index": 1, "name": "Microsoft Basic Render Driver", "vendor_id": 0x1414,
+         "device_id": 0x8C, "vram_mb": 0, "shared_mb": 16000, "software": True}])
+    vk = G.vulkan()
+    assert [(g.index, g.name, g.maker, g.vram_mb) for g in vk] == \
+        [(0, "AMD Radeon RX 6600", "amd", 8176)]
+    assert "WinError 126" in G.vulkan_note and "adapter list" in G.vulkan_note
+    hw = K.Hardware(cores=8, gpus=vk)
+    c = K.preset(hw, "standard")
+    assert c.gpu == "vulkan:0" and c.spec("translator") == "vulkan:0"

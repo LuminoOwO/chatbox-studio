@@ -179,7 +179,24 @@ def run_gui(mode: str) -> int:
     l0 = QVBoxLayout(p0)
     l0.setContentsMargins(0, 8, 0, 0)
     l0.setSpacing(10)
-    l0.addWidget(hint(pc_line()))
+    pc_row = QHBoxLayout()
+    pc_row.addWidget(hint(pc_line()), 1)
+    report_btn = QPushButton("Copy hardware report")
+    report_btn.setToolTip("Copies what the setup found on this PC (graphics cards, drivers, "
+                          "why one isn't usable) - for a bug report")
+
+    def copy_report():
+        from PySide6.QtGui import QGuiApplication
+        text = GP.hardware_report()
+        QGuiApplication.clipboard().setText(text)
+        report_btn.setText("Copied ✓")
+        try:
+            (paths.data_dir() / "hardware.txt").write_text(text, encoding="utf-8")
+        except OSError:
+            pass
+    report_btn.clicked.connect(copy_report)
+    pc_row.addWidget(report_btn)
+    l0.addLayout(pc_row)
     l0.addWidget(section("WHAT DO YOU WANT TO INSTALL?"))
     pgroup = QButtonGroup(win)
     cards = {}
@@ -340,7 +357,9 @@ def run_gui(mode: str) -> int:
                        else ""))
     lay.addWidget(gpu_hint)
     if not hw.gpus:
-        gpu_hint.setText("No NVIDIA or AMD graphics card found - everything runs on the CPU.")
+        gpu_hint.setText("No NVIDIA or AMD graphics card found - everything runs on the CPU."
+                         + (f" ({GP.vulkan_note})" if GP.vulkan_note else "")
+                         + " “Copy hardware report” on the first page shows the details.")
 
     lay.addWidget(section("EXTRAS FOR THE CHATBOX"))
     group_box("media")
